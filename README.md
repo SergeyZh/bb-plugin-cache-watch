@@ -3,7 +3,7 @@
 Inspect prompt-cache usage in [BB](https://getbb.app) and optionally keep selected
 idle threads active with time-limited, paid keepalive turns.
 
-Experimental version **0.1.0**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
+Experimental version **0.2.0**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
 Verified with BB 0.48.1 / SDK 0.6.104 on macOS.
 
 ## Thread panel
@@ -18,7 +18,7 @@ available.
 - TTL text is green before estimated expiry, red after it, and neutral when unknown.
 - Provider expiry takes precedence. When Codex or Central Codex reports cache
   activity without an expiry, the display assumes 30 minutes after the latest
-  report and marks it **assumed 30m**. This does not change keepalive scheduling.
+  report and marks it **assumed 30m**. The same estimate drives keepalive scheduling.
 - `TTL not reported` means no expiry estimate is available.
   `Estimated TTL elapsed` does not confirm that the cache is cold.
 - Usage counts can aggregate several requests in a turn. They are not the size
@@ -31,10 +31,10 @@ Viewing the panel never enables keepalive or sends a model request.
 Once the repository and first release are published:
 
 ```sh
-bb plugin install git:https://github.com/SergeyZh/bb-plugin-cache-watch.git@v0.1.0
+bb plugin install git:https://github.com/SergeyZh/bb-plugin-cache-watch.git@v0.2.0
 ```
 
-For compatible 0.x updates, use `@^0.1.0` instead of the exact tag. BB builds Git
+For compatible 0.x updates, use `@^0.2.0` instead of the exact tag. BB builds Git
 installs automatically. See [RELEASING.md](RELEASING.md) for first-publication steps.
 
 For a local source checkout, use Node.js 24 and npm:
@@ -51,12 +51,31 @@ needed: ordinary turns use the thread's configured provider.
 
 ## Optional paid keepalive
 
-Nothing is enabled on installation. Inspect or manage a specific thread with:
+Nothing is enabled on installation. Expand **Cache** above the session composer
+(or **Prompt cache** in the context card) to enable, renew, or stop keepalive for
+that session and select its duration. The `/keepalive start`, `/keepalive stop`,
+and `/keepalive status` skills manage the current session through the agent
+(and invoke the LLM).
+
+For direct control **without the LLM**, open BB's command palette with
+**Cmd+Shift+P** (macOS) or **Ctrl+Shift+P**, then search for **Keepalive**:
+
+- **Show status** — displays the current session's state and next ping.
+- **Enable paid keepalive for 6 hours**.
+- **Renew paid keepalive for 6 hours** — replaces the lease and resets counters.
+- **Stop keepalive**.
+
+Commands act on the session selected when invoked, call the plugin directly,
+and show results or errors as BB notifications. They are hidden without a
+selected session. Use the Cache panel to choose another duration.
+`/keepalive start for 2 hours` selects a different duration.
+
+Inspect or manage a specific thread from the CLI with:
 
 ```sh
 bb cache-watch status thr_example --json
 bb cache-watch list --json
-bb cache-watch start thr_example --minutes 4 --hours 6
+bb cache-watch start thr_example --hours 6
 bb cache-watch stop thr_example
 ```
 
@@ -66,8 +85,7 @@ sandbox. Existing agent goals or instructions can affect its behavior.
 Keepalive can cost more than recreating a cache and guarantees neither a cache
 hit nor savings. There is no native silent-prewarm integration.
 
-Intervals range from 2 to 55 minutes, and durations from 15 minutes to 24 hours
-(default: 6 hours). Start replaces the previous lease and resets its counters.
+Durations range from 15 minutes to 24 hours (default: 6 hours). Start replaces the previous lease and resets its counters.
 At most 50 watches are stored; stop expired watches to free slots.
 
 Active threads, queued work, background agents, offline runtimes, and archived
@@ -75,9 +93,15 @@ threads are skipped. New reported usage postpones the next ping. Failed threads
 and ambiguous errors pause the watch. Dispatch checks reject stale plugin pings;
 user messages always pass through this plugin's admission hook.
 
-The scheduler sweeps once per minute. A due ping can be up to a minute late,
-plus provider delays. Choose an interval below the provider's actual TTL with
-room for that delay. The Codex display assumption is not a known cache policy.
+Pings are scheduled **5 minutes before estimated cache expiry**, using the same
+estimate shown in the session panel. Provider deadlines take precedence over
+reported TTL; Codex without either uses the marked 30-minute assumption after
+reported cache activity. This assumption is not a known cache policy. Unknown
+or elapsed expiry waits for fresh telemetry. Each estimated deadline allows at
+most one attempt, so a missing usage update cannot cause repeated paid pings.
+The scheduler sweeps once per minute; a ping can be up to a minute late, plus
+provider delays. Existing fixed-interval leases migrate to this policy on reload;
+the old `--minutes` option has been removed.
 
 Stop removes future and deferred plugin pings; it does not interrupt an ongoing
 turn. Reloads preserve leases. Disable/uninstall stops scheduling, but re-enabling
@@ -107,8 +131,7 @@ npm pack --dry-run
 ```
 
 The build CLI is pinned to BB 0.48.1 in development dependencies and does not
-need a running server. GitHub Actions runs type checking, the **22 backend and
-frontend tests**, SDK checks, and a build. See [CONTRIBUTING.md](CONTRIBUTING.md),
+need a running server. GitHub Actions runs type checking, the backend and frontend tests, SDK checks, and a build. See [CONTRIBUTING.md](CONTRIBUTING.md),
 [VERIFICATION.md](VERIFICATION.md), and [CHANGELOG.md](CHANGELOG.md).
 
 A live, user-authorized Central Codex test completed exactly two scheduled

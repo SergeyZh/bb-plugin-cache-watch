@@ -3,7 +3,25 @@
 Checked on 2026-10-30 with BB 0.48.1, Plugin SDK 0.6.104, and Node.js 24 on macOS.
 This public report omits local paths, prompts, and session identifiers.
 
-## Automated checks
+## 2026-11-01 update
+
+- Strict TypeScript checks and all 32 backend/frontend tests passed.
+- SDK declarations match the running host (0.6.104); production bundles built.
+- Reloaded the locally installed plugin and read the current Codex session's
+  status successfully. No watches were enabled by verification.
+- Added fake-host checks for expiry-minus-five-minute scheduling, provider
+  deadline precedence, Codex fallback, ordinary activity, unknown/elapsed
+  expiry, single attempts per deadline, legacy lease migration, and CLI defaults.
+- Palette tests cover command registration, selected-session targeting, no-session guards,
+  direct RPC, notifications, error recovery, and cleanup on unmount.
+- Both banner details and context-card controls were tested for session binding,
+  duration selection, enable, renew, and stop.
+- A live remote UI check reached the BB Connect sign-in page in an isolated
+  desktop browser tab. New controls were verified with the frontend harness;
+  visual verification in an authenticated live BB page remains uncompleted.
+- The two-ping test below used the previous fixed-interval implementation.
+
+## Automated checks (2026-10-30)
 
 - TypeScript strict type checking.
 - 22 backend and frontend tests using BB's official fake host and frontend harness.

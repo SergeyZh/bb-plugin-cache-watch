@@ -20,7 +20,8 @@ async function setup() {
   return { ...host, setThread: (next: typeof thread) => { thread = next; }, thread: () => thread };
 }
 async function start(host: Awaited<ReturnType<typeof setup>>, extra = {}) {
-  return host.harness.behavior.callRpc('start', { threadId, intervalMinutes: 4, durationHours: 6, ...extra });
+  host.harness.sdk.stub('threads.context', async () => ({ usage: { compactionOfferAt: new Date(baseTime + 540_000).toISOString() } }));
+  return host.harness.behavior.callRpc('start', { threadId, durationHours: 6, ...extra });
 }
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(baseTime); });
 afterEach(async () => { for (const host of hosts.splice(0)) await host.harness.lifecycle.dispose(); vi.useRealTimers(); });
@@ -112,8 +113,8 @@ describe('Cache Watch lifecycle', () => {
     expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
   });
   it('postpones the next ping after reported normal activity', () => {
-    const watch: Watch = { threadId, intervalMinutes: 4, armedAt: baseTime, until: baseTime + 3_600_000, lastAttemptAt: null, sent: 0, disabled: false, error: null };
-    expect(nextPingAt(watch, { at: baseTime + 180_000, readTokens: 0, writeTokens: null, inputTokens: 100, ttlMs: null })).toBe(baseTime + 420_000);
+    const watch: Watch = { threadId, armedAt: baseTime, until: baseTime + 3_600_000, lastAttemptAt: null, sent: 0, disabled: false, error: null };
+    expect(nextPingAt(watch, baseTime + 720_000)).toBe(baseTime + 420_000);
   });
   it('does not send when disposed while provider telemetry is being fetched', async () => {
     const h = await setup(); await start(h); vi.setSystemTime(baseTime + 240_000);
@@ -173,8 +174,79 @@ describe('Cache Watch lifecycle', () => {
     expect(h.harness.inspection.sdk.callsTo('threads.queuedMessages.delete')).toEqual([[{ threadId, queuedMessageId: 'q1' }]]);
     expect(await h.harness.behavior.callRpc('list')).toEqual([expect.objectContaining({ sent: 0 })]);
   });
+  it('defaults to expiry minus five minutes, reschedules on activity, and waits after an attempt', async () => {
+    const h = await setup();
+    h.setThread({ ...h.thread(), providerId: 'central-codex' });
+    let reportAt = baseTime;
+    h.harness.sdk.stub('threads.events.list', async () => [{ type: 'thread/tokenUsage/updated', createdAt: reportAt,
+      data: { tokenUsage: { last: { inputTokens: 1500, cachedInputTokens: 1000 } } } }]);
+    await h.harness.behavior.callRpc('start', { threadId });
+    expect(await h.harness.behavior.callRpc('status', { threadId })).toEqual(expect.objectContaining({ nextPingAt: baseTime + 25 * 60_000 }));
+    vi.setSystemTime(baseTime + 4 * 60_000);
+    await h.harness.behavior.runSchedule('keepalive');
+    expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
+    reportAt = baseTime + 10 * 60_000;
+    vi.setSystemTime(baseTime + 25 * 60_000);
+    await h.harness.behavior.runSchedule('keepalive');
+    expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
+    vi.setSystemTime(baseTime + 35 * 60_000);
+    await h.harness.behavior.runSchedule('keepalive');
+    expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(1);
+    vi.setSystemTime(baseTime + 36 * 60_000);
+    await h.harness.behavior.runSchedule('keepalive');
+    expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(1);
+    expect(await h.harness.behavior.callRpc('status', { threadId })).toEqual(expect.objectContaining({ nextPingAt: null }));
+    reportAt = baseTime + 35 * 60_000;
+    expect(await h.harness.behavior.callRpc('status', { threadId })).toEqual(expect.objectContaining({ nextPingAt: baseTime + 60 * 60_000 }));
+  });
+  it('uses provider deadline before TTL and the Codex assumption', async () => {
+    const h = await setup();
+    h.setThread({ ...h.thread(), providerId: 'codex' });
+    h.harness.sdk.stub('threads.events.list', async () => [{ type: 'thread/tokenUsage/updated', createdAt: baseTime,
+      data: { tokenUsage: { last: { inputTokens: 1500, cachedInputTokens: 1000 }, promptCacheTtlMs: 3_600_000 } } }]);
+    await h.harness.behavior.callRpc('start', { threadId });
+    expect(await h.harness.behavior.callRpc('status', { threadId })).toEqual(expect.objectContaining({ nextPingAt: baseTime + 55 * 60_000 }));
+    h.harness.sdk.stub('threads.context', async () => ({ usage: { compactionOfferAt: new Date(baseTime + 20 * 60_000).toISOString() } }));
+    expect(await h.harness.behavior.callRpc('status', { threadId })).toEqual(expect.objectContaining({ nextPingAt: baseTime + 15 * 60_000 }));
+  });
+  it('waits for unknown or elapsed expiry instead of sending periodically', async () => {
+    const h = await setup();
+    await h.harness.behavior.callRpc('start', { threadId });
+    vi.setSystemTime(baseTime + 25 * 60_000);
+    await h.harness.behavior.runSchedule('keepalive');
+    h.harness.sdk.stub('threads.context', async () => ({ usage: { compactionOfferAt: new Date(baseTime + 20 * 60_000).toISOString() } }));
+    await h.harness.behavior.runSchedule('keepalive');
+    expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
+    expect(await h.harness.behavior.callRpc('status', { threadId })).toEqual(expect.objectContaining({ nextPingAt: null }));
+  });
+  it('sends once when enabled inside the five-minute window', async () => {
+    const h = await setup();
+    h.harness.sdk.stub('threads.context', async () => ({ usage: { compactionOfferAt: new Date(baseTime + 120_000).toISOString() } }));
+    await h.harness.behavior.callRpc('start', { threadId });
+    await h.harness.behavior.runSchedule('keepalive');
+    vi.setSystemTime(baseTime + 60_000);
+    await h.harness.behavior.runSchedule('keepalive');
+    expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(1);
+  });
+  it('migrates persisted four-minute watches to expiry scheduling on reload', async () => {
+    const h = await setup();
+    await h.bb.storage.kv.set('watches-v1', [{ threadId, intervalMinutes: 4, armedAt: baseTime, until: baseTime + 3_600_000,
+      lastAttemptAt: null, sent: 0, error: null, disabled: false }]);
+    const reloaded = await h.harness.lifecycle.reload(plugin);
+    hosts.push(reloaded);
+    vi.setSystemTime(baseTime + 240_000);
+    await reloaded.harness.behavior.runSchedule('keepalive');
+    expect(reloaded.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
+    expect(await reloaded.harness.behavior.callRpc('list')).toEqual([expect.not.objectContaining({ intervalMinutes: 4 })]);
+  });
+  it('CLI start defaults to expiry scheduling and rejects obsolete intervals', async () => {
+    const h = await setup();
+    expect((await h.harness.behavior.runCli(['start', threadId, '--hours', '2', '--json'])).exitCode).toBe(0);
+    expect(await h.harness.behavior.callRpc('list')).toEqual([expect.objectContaining({ until: baseTime + 7_200_000 })]);
+    expect((await h.harness.behavior.runCli(['start', threadId, '--minutes', '4'])).exitCode).toBe(1);
+  });
   it('uses public SDK imports only', async () => {
-    const result = await experimental_scanPublicSdkOnly(process.cwd(), { allow: [/^vitest(?:\/config)?$/, /^react(?:-dom)?$/, /^@testing-library\/react$/, /^@\/components\/ui\//, /^@radix-ui\/react-(?:slot|checkbox|dialog)$/, /^(?:class-variance-authority|clsx|tailwind-merge)$/] });
+    const result = await experimental_scanPublicSdkOnly(process.cwd(), { allow: [/^vitest(?:\/config)?$/, /^react(?:-dom)?$/, /^sonner$/, /^@testing-library\/react$/, /^@\/components\/ui\//, /^@radix-ui\/react-(?:slot|checkbox|dialog)$/, /^(?:class-variance-authority|clsx|tailwind-merge)$/] });
     expect(result.violations).toEqual([]); expect(result.privateDependencies).toEqual([]);
   });
 });

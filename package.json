@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-cache-watch",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
@@ -65,6 +65,7 @@
     "core.ts",
     "app.tsx",
     "thread-cache.tsx",
+    "keepalive-commands.tsx",
     "components",
     "lib",
     "hooks",

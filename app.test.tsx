@@ -3,6 +3,12 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, fireEvent, waitFor } from '@testing-library/react';
 import { loadPluginApp, renderSlot } from '@get-bb/plugin-sdk/testing/app';
 import appDefinition from './app';
+import { definePluginApp, type PluginCommandRegistration } from '@get-bb/plugin-sdk/app';
+import { experimental_makePanelController } from '@get-bb/plugin-sdk/testing';
+import { toast } from 'sonner';
+
+vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+
 import { remainingTime } from './thread-cache';
 
 const unmounts: (() => void)[] = [];
@@ -15,7 +21,7 @@ it('loads the registered page, shows unknown cache state, and requires opt-in', 
     rpc: {
       list: () => [],
       status: () => ({ threadId: 'thr_demo123', title: 'Demo thread', providerId: 'central-codex', status: 'idle', sample: null, estimatedExpiresAt: null, watch: null, nextPingAt: null }),
-      start: (input: unknown) => { starts.push(input); return { threadId: 'thr_demo123', intervalMinutes: 4, armedAt: Date.now(), until: Date.now() + 21_600_000, lastAttemptAt: null, sent: 0, error: null, disabled: false }; },
+      start: (input: unknown) => { starts.push(input); return { threadId: 'thr_demo123', armedAt: Date.now(), until: Date.now() + 21_600_000, lastAttemptAt: null, sent: 0, error: null, disabled: false }; },
     },
   });
   unmounts.push(() => slot.lifecycle.unmount());
@@ -23,7 +29,7 @@ it('loads the registered page, shows unknown cache state, and requires opt-in', 
   expect(await slot.findByText('Keepalive uses ordinary paid turns')).toBeTruthy();
   expect(starts).toEqual([]);
   fireEvent.click(await slot.findByRole('button', { name: 'Enable paid keepalive' }));
-  await waitFor(() => expect(starts).toEqual([{ threadId: 'thr_demo123', intervalMinutes: 4, durationHours: 6 }]));
+  await waitFor(() => expect(starts).toEqual([{ threadId: 'thr_demo123', durationHours: 6 }]));
 });
 it('shows RPC failures and leaves the stop control usable', async () => {
   const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
@@ -142,4 +148,92 @@ it('counts down locally each second and stops at an elapsed estimate', async () 
   await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
   expect(slot.getByRole('button', { name: /Estimated TTL elapsed/ })).toBeTruthy();
   expect(slot.getByText(/Estimated TTL elapsed.*assumed 30m/).className).toContain('text-red-700');
+});
+
+for (const surface of ['card', 'banner'] as const) {
+  it(`manages the pane session's keepalive from the ${surface}`, async () => {
+    const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
+    const threadId = 'thr_controls123';
+    let watch: Record<string, unknown> | null = null;
+    const props = {
+      threadId, projectId: 'proj_test', environment: null, segments: [], isExpanded: true, onToggle() {},
+    };
+    const options = {
+      context: { projectId: 'proj_other', threadId: 'thr_other123' },
+      rpc: {
+        status: () => ({ ...cacheStatus(threadId), watch, nextPingAt: watch ? Date.now() + 60_000 : null }),
+        start: (input: unknown) => { watch = { threadId, until: Date.now() + 7_200_000, sent: 0, disabled: false }; return watch; },
+        stop: () => { watch = null; return { stopped: true }; },
+      },
+    };
+    const slot = surface === 'card' ? renderSlot(app.threadContextCardSections[0]!, props, options)
+      : renderSlot({ component: app.threadContextSegments[0]!.details! }, props, options);
+    unmounts.push(() => slot.lifecycle.unmount());
+    expect(await slot.findByText('Keepalive: Off')).toBeTruthy();
+    fireEvent.change(slot.getByRole('spinbutton', { name: 'Keepalive duration (hours)' }), { target: { value: '2' } });
+    fireEvent.click(slot.getByRole('button', { name: 'Enable paid keepalive' }));
+    expect(await slot.findByText('Keepalive: Enabled')).toBeTruthy();
+    expect(slot.inspection.rpcCalls.filter(c => c.method === 'start').map(c => c.input)).toEqual([{ threadId, durationHours: 2 }]);
+    fireEvent.click(slot.getByRole('button', { name: 'Renew paid keepalive' }));
+    await waitFor(() => expect(slot.inspection.rpcCalls.filter(c => c.method === 'start')).toHaveLength(2));
+    await waitFor(() => expect(slot.getByRole('button', { name: 'Stop keepalive' }).hasAttribute('disabled')).toBe(false));
+    fireEvent.click(slot.getByRole('button', { name: 'Stop keepalive' }));
+    expect(await slot.findByText('Keepalive: Off')).toBeTruthy();
+    expect(slot.inspection.rpcCalls.filter(c => c.method === 'stop').map(c => c.input)).toEqual([{ threadId }]);
+  });
+}
+
+async function palette() {
+  const commands: PluginCommandRegistration[] = [];
+  const app = await loadPluginApp(definePluginApp(builder => appDefinition.setup({
+    ...builder,
+    commands: { register(command) { commands.push(command); builder.commands.register(command); } },
+  })));
+  return { app, commands, context: { threadId: 'thr_palette123', projectId: 'proj_test', experimental_panel: experimental_makePanelController() } };
+}
+
+it('runs palette keepalive commands directly for the invocation session and cleans up on unmount', async () => {
+  vi.mocked(toast).mockClear(); vi.mocked(toast.success).mockClear();
+  const { app, commands, context } = await palette();
+  expect(commands.map(c => c.id)).toEqual(['keepalive-status', 'keepalive-start', 'keepalive-renew', 'keepalive-stop']);
+  expect(commands.every(c => !c.isAvailable!(context))).toBe(true);
+  const slot = renderSlot(app.appOverlays[0]!, {}, {
+    context: { threadId: 'thr_other123', projectId: null },
+    rpc: {
+      status: () => ({ ...cacheStatus(context.threadId), title: 'Palette session' }),
+      start: () => ({ until: Date.now() + 21_600_000 }),
+      stop: () => ({ stopped: true }),
+    },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  expect(commands.every(c => c.isAvailable!(context))).toBe(true);
+  for (const command of commands) {
+    expect(command.isAvailable!({ ...context, threadId: null })).toBe(false);
+    await act(async () => { await command.run({ ...context, threadId: null }); });
+  }
+  expect(slot.inspection.rpcCalls).toEqual([]);
+  for (const command of commands) await act(async () => { await command.run(context); });
+  expect(slot.inspection.rpcCalls.map(c => [c.method, c.input])).toEqual([
+    ['status', { threadId: context.threadId }],
+    ['start', { threadId: context.threadId, durationHours: 6 }],
+    ['start', { threadId: context.threadId, durationHours: 6 }],
+    ['stop', { threadId: context.threadId }],
+  ]);
+  expect(toast).toHaveBeenCalledWith('Keepalive: Off', expect.objectContaining({ description: 'Palette session' }));
+  expect(toast.success).toHaveBeenCalledWith('Keepalive stopped', expect.anything());
+  slot.lifecycle.unmount();
+  expect(commands.every(c => !c.isAvailable!(context))).toBe(true);
+});
+
+it('reports palette RPC failures and allows another command afterward', async () => {
+  vi.mocked(toast.error).mockClear();
+  const { app, commands, context } = await palette();
+  const slot = renderSlot(app.appOverlays[0]!, {}, {
+    rpc: { status: () => { throw new Error('Provider unavailable'); }, stop: () => ({ stopped: true }) },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  await act(async () => { await commands[0]!.run(context); });
+  expect(toast.error).toHaveBeenCalledWith('Keepalive command failed', { description: `${context.threadId}: Provider unavailable` });
+  await act(async () => { await commands[3]!.run(context); });
+  expect(slot.inspection.rpcCalls.map(c => c.method)).toEqual(['status', 'stop']);
 });

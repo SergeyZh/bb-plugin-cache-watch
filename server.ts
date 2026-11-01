@@ -1,6 +1,6 @@
 import { defineRpcContract, type BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
-import { PING, watchInput, watchSchema, sampleSchema, nextPingAt, eligible, type Sample, type Watch } from './core';
+import { PING, watchInput, watchSchema, sampleSchema, nextPingAt, estimateExpiry, eligible, type Sample, type Watch } from './core';
 
 const idInput = z.object({ threadId: watchInput.shape.threadId }).strict();
 const statusSchema = z.object({
@@ -19,7 +19,10 @@ export const rpcContract = defineRpcContract({
 
 export default async function plugin(bb: BbPluginApi) {
   const KEY = 'watches-v1';
-  const parsed = z.array(watchSchema).max(50).safeParse(await bb.storage.kv.get(KEY) ?? []);
+  // Migrate persisted fixed-interval leases to expiry scheduling on reload.
+  const storedWatch = watchSchema.extend({ intervalMinutes: z.number().int().min(2).max(55).optional() })
+    .transform(({ intervalMinutes: _legacyInterval, ...watch }) => watch);
+  const parsed = z.array(storedWatch).max(50).safeParse(await bb.storage.kv.get(KEY) ?? []);
   if (!parsed.success) throw new Error('Invalid Cache Watch storage; refusing to resume pings.');
   let watches: Watch[] = parsed.data;
   let disposed = false;
@@ -50,25 +53,14 @@ export default async function plugin(bb: BbPluginApi) {
       bb.sdk.threads.get({ threadId }), sample(threadId), bb.sdk.threads.context({ threadId }),
     ]);
     const watch = watches.find(w => w.threadId === threadId) ?? null;
-    const offer = context.usage?.compactionOfferAt;
-    // The provider's deadline is an estimate, not a cache status response.
-    const reportedDeadline = offer ? Date.parse(offer) : null;
-    let expires = reportedDeadline !== null && Number.isFinite(reportedDeadline)
-      ? reportedDeadline : last?.ttlMs && last.ttlMs > 0 ? last.at + last.ttlMs : null;
-    let expirySource: CacheStatus['expirySource'] = expires === null ? null : 'provider';
-    // Display-only assumption explicitly requested for Codex. It is not the
-    // provider's actual policy and never changes the keepalive schedule.
-    if (expires === null && (thread.providerId === 'codex' || thread.providerId === 'central-codex')
-      && last && (last.readTokens > 0 || (last.writeTokens ?? 0) > 0)) {
-      expires = last.at + 30 * 60_000;
-      expirySource = 'codex-assumption';
-    }
+    const expiry = estimateExpiry(thread.providerId, last, context.usage?.compactionOfferAt);
+    const due = watch ? nextPingAt(watch, expiry.at) : null;
     return {
       threadId, title: thread.title ?? thread.titleFallback ?? threadId,
       providerId: thread.providerId, status: thread.runtime.displayStatus,
-      sample: last, estimatedExpiresAt: expires !== null && Number.isFinite(expires) ? expires : null,
-      expirySource,
-      watch, nextPingAt: watch && !watch.disabled && watch.until > Date.now() ? nextPingAt(watch, last) : null,
+      sample: last, estimatedExpiresAt: expiry.at,
+      expirySource: expiry.source,
+      watch, nextPingAt: watch && !watch.disabled && watch.until > Date.now() && expiry.at !== null && expiry.at > Date.now() && due !== null && due < watch.until ? due : null,
     };
   }
   async function start(input: z.infer<typeof watchInput>): Promise<Watch> {
@@ -76,7 +68,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (thread.archivedAt !== null || thread.deletedAt !== null) throw new Error('Cannot watch an archived or deleted thread.');
     if (!watches.some(w => w.threadId === input.threadId) && watches.length >= 50) throw new Error('Limit: 50 watches. Stop another watch first.');
     const now = Date.now();
-    const watch: Watch = { threadId: input.threadId, intervalMinutes: input.intervalMinutes,
+    const watch: Watch = { threadId: input.threadId,
       armedAt: now, until: now + input.durationHours * 3_600_000,
       lastAttemptAt: null, sent: 0, error: null, disabled: false };
     watches = [...watches.filter(w => w.threadId !== input.threadId), watch];
@@ -118,7 +110,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (disposed) return;
       if (watch.disabled || watch.until <= Date.now()) continue;
       try {
-        const [thread, last] = await Promise.all([bb.sdk.threads.get({ threadId: watch.threadId }), sample(watch.threadId)]);
+        const [thread, last, context] = await Promise.all([bb.sdk.threads.get({ threadId: watch.threadId }), sample(watch.threadId), bb.sdk.threads.context({ threadId: watch.threadId })]);
         if (disposed) return;
         if (thread.archivedAt !== null || thread.deletedAt !== null || thread.status === 'error') {
           watch.disabled = true;
@@ -126,7 +118,9 @@ export default async function plugin(bb: BbPluginApi) {
           await save();
           continue;
         }
-        if (!eligible(thread) || nextPingAt(watch, last) > Date.now()) continue;
+        const expiry = estimateExpiry(thread.providerId, last, context.usage?.compactionOfferAt);
+        const due = nextPingAt(watch, expiry.at);
+        if (!eligible(thread) || expiry.at === null || expiry.at <= Date.now() || due === null || due > Date.now()) continue;
         // Persist before sending: a restart must not replay an uncertain send.
         watch.lastAttemptAt = Date.now();
         await save();
@@ -151,7 +145,7 @@ export default async function plugin(bb: BbPluginApi) {
   }));
   bb.onDispose(() => { disposed = true; });
 
-  const usage = 'bb cache-watch status <thread-id> [--json]\nbb cache-watch list [--json]\nbb cache-watch start <thread-id> [--minutes 4] [--hours 6] [--json]\nbb cache-watch stop <thread-id> [--json]\nPings are ordinary paid turns, visible in the transcript. TTL is an estimate.';
+  const usage = 'bb cache-watch status <thread-id> [--json]\nbb cache-watch list [--json]\nbb cache-watch start <thread-id> [--hours 6] [--json]\nbb cache-watch stop <thread-id> [--json]\nPings are ordinary paid turns, visible in the transcript. TTL is an estimate.';
   bb.cli.register({
     name: 'cache-watch', summary: 'Inspect cache usage and opt in to bounded keepalive turns',
     commands: ['status', 'list', 'start', 'stop'].map(name => ({ name, summary: `${name} cache watch`, usage: `bb cache-watch ${name} [--help]` })),
@@ -169,10 +163,10 @@ export default async function plugin(bb: BbPluginApi) {
           const options: Record<string, number> = {};
           for (let i = 0; i < flags.length; i += 2) {
             const flag = flags[i];
-            if ((flag !== '--minutes' && flag !== '--hours') || flags[i + 1] === undefined || flag in options) throw new Error(usage);
+            if (flag !== '--hours' || flags[i + 1] === undefined || flag in options) throw new Error(usage);
             options[flag] = Number(flags[i + 1]);
           }
-          const input = watchInput.parse({ threadId, intervalMinutes: options['--minutes'], durationHours: options['--hours'] });
+          const input = watchInput.parse({ threadId, durationHours: options['--hours'] });
           result = await serial(() => start(input));
         } else throw new Error(usage);
         return { exitCode: 0, stdout: JSON.stringify(result, null, json ? undefined : 2) };

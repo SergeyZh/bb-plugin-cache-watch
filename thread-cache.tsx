@@ -79,6 +79,36 @@ function useThreadCache(threadId: string) {
   return { status: current?.status ?? null, error: current?.error ?? false, fetching, refresh };
 }
 
+function KeepaliveControls({ threadId, status, refresh }: { threadId: string; status: CacheStatus | null; refresh: () => Promise<void> }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [hours, setHours] = useState('6');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const watch = status?.watch;
+  const active = watch && !watch.disabled && watch.until > Date.now();
+  async function change(enable: boolean) {
+    setBusy(true); setError('');
+    try {
+      if (enable) await rpc.call('start', { threadId, durationHours: Number(hours) });
+      else await rpc.call('stop', { threadId });
+      await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not update keepalive.'); }
+    finally { setBusy(false); }
+  }
+  return <div className="space-y-2 border-t px-3 pt-2 text-xs">
+    <p>Keepalive: {active ? 'Enabled' : watch?.disabled ? 'Paused' : watch ? 'Expired' : 'Off'}</p>
+    {watch && <p className="text-muted-foreground">Ends: {timestamp(watch.until)} · {watch.sent} pings</p>}
+    {active && <p className="text-muted-foreground">Next ping: {status?.nextPingAt == null ? 'Waiting for fresh expiry telemetry' : timestamp(status.nextPingAt)}</p>}
+    <p className="text-muted-foreground">Ordinary paid turns · 5 minutes before estimated expiry{status?.expirySource === 'codex-assumption' ? ' · assumed 30m TTL' : ''}.</p>
+    <div className="flex flex-wrap items-center gap-2">
+      <label>Hours <input aria-label="Keepalive duration (hours)" type="number" min="0.25" max="24" step="0.25" value={hours} onChange={e => setHours(e.target.value)} className="w-16 rounded border bg-background px-1 py-0.5" /></label>
+      <button type="button" disabled={busy || !status || !Number.isFinite(Number(hours)) || Number(hours) < 0.25 || Number(hours) > 24} onClick={() => void change(true)} className="rounded border px-2 py-1 disabled:opacity-50">{active ? 'Renew paid keepalive' : 'Enable paid keepalive'}</button>
+      <button type="button" disabled={busy} onClick={() => void change(false)} className="rounded border px-2 py-1 disabled:opacity-50">Stop keepalive</button>
+    </div>
+    {(error || watch?.error) && <p role="alert" className="text-destructive">{error || watch?.error}</p>}
+  </div>;
+}
+
 function CachePanel({ threadId, card = false }: { threadId: string; card?: boolean }) {
   const { status, error, fetching, refresh } = useThreadCache(threadId);
   const sample = status?.sample;
@@ -104,6 +134,7 @@ function CachePanel({ threadId, card = false }: { threadId: string; card?: boole
         <Icon name="RotateCcw" className={`size-3.5${fetching ? ' animate-spin' : ''}`} />
       </button>
     </div>
+    <KeepaliveControls key={threadId} threadId={threadId} status={status} refresh={refresh} />
   </div>;
 }
 

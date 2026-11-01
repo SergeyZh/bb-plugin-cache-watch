@@ -13,8 +13,13 @@ stays unknown. Reports can aggregate several model requests in one turn.
 
 ## Optional keepalive
 
-Use the Cache Watch page or `bb cache-watch` to enable paid keepalive for a
-selected thread and a limited duration. No watch starts automatically.
+Use the Keepalive commands in BB’s palette (Cmd/Ctrl+Shift+P) for direct
+control without invoking the LLM. Status and action results appear as notifications.
+
+Use the expanded Cache panel, Prompt cache context card, Cache Watch page,
+`/keepalive start|stop|status`, or `bb cache-watch` to manage paid keepalive for a
+selected session and a limited duration. Pings run five minutes before estimated
+expiry; unknown or elapsed expiry waits for fresh telemetry. No watch starts automatically.
 Keepalive sends ordinary visible turns asking the agent to reply OK. It can
 cost more than recreating a cache and cannot guarantee a cache hit or savings.
 Active threads are skipped; stop cancels future and deferred plugin pings.

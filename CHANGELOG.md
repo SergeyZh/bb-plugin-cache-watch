@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0
+
+- Direct Keepalive palette commands for status, enable, renew, and stop, with
+  session-bound RPC and result/error notifications; no LLM invocation.
+- Enable, renew, and stop keepalive for a session from its expanded Cache panel
+  or Prompt cache context card, with duration and next-ping details.
+- `/keepalive start`, `/keepalive stop`, and `/keepalive status` skills for the
+  current session.
+- Schedule pings five minutes before estimated expiry, using provider telemetry
+  or the marked Codex 30-minute assumption. Wait when expiry is unknown/elapsed
+  and attempt each deadline only once until telemetry advances.
+- Migrate persisted interval watches on reload; remove the `--minutes` option.
+- 32 backend/frontend tests cover scheduling, migration, and session controls.
+
 ## 0.1.0
 
 Initial experimental release.

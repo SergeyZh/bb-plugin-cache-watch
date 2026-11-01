@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { definePluginApp, experimental_useThreadContextKind, useBbContext, useRealtime, useRpc } from '@get-bb/plugin-sdk/app';
+import { registerKeepaliveCommands } from './keepalive-commands';
 import { ThreadCacheCard, ThreadCacheDetails, ThreadCacheSummary } from './thread-cache';
 import type { rpcContract, CacheStatus } from './server';
 import type { Watch } from './core';
@@ -11,7 +12,6 @@ function CacheWatchPage() {
   const rpc = useRpc<typeof rpcContract>();
   const context = useBbContext();
   const [threadId, setThreadId] = useState(context.threadId ?? '');
-  const [minutes, setMinutes] = useState('4');
   const [hours, setHours] = useState('6');
   const [status, setStatus] = useState<CacheStatus | null>(null);
   const [watches, setWatches] = useState<Watch[]>([]);
@@ -43,17 +43,16 @@ function CacheWatchPage() {
     <div className="rounded-lg border p-4 space-y-2">
       <p className="font-medium">Keepalive uses ordinary paid turns</p>
       <p className="text-muted-foreground">Each ping and its reply remain in the transcript. The agent is instructed to reply OK without tools. BB does not enforce a tool ban for these turns. Cache reuse and savings are not guaranteed.</p>
-      <p className="text-muted-foreground">Choose an interval shorter than your provider's TTL: 4 minutes for a 5-minute cache, 25 for 30 minutes, or 55 for one hour. Polling the monitor does not warm the cache.</p>
+      <p className="text-muted-foreground">Pings are scheduled 5 minutes before estimated cache expiry. Codex uses an assumed 30-minute TTL when the provider reports cache activity without an expiry. Unknown or elapsed expiry waits for fresh telemetry.</p>
     </div>
     <section className="space-y-3">
       <label className="block space-y-1">Thread ID<Input value={threadId} onChange={e => { setThreadId(e.target.value.trim()); setStatus(null); }} placeholder="thr_…" /></label>
       <div className="flex gap-4">
-        <label className="flex-1 space-y-1">Ping interval (minutes)<Input type="number" min="2" max="55" value={minutes} onChange={e => setMinutes(e.target.value)} /></label>
         <label className="flex-1 space-y-1">Keep alive for (hours)<Input type="number" min="0.25" max="24" step="0.25" value={hours} onChange={e => setHours(e.target.value)} /></label>
       </div>
       <div className="flex flex-wrap gap-2">
         <Button disabled={busy || !threadId} variant="outline" onClick={() => void act(refresh)}>Refresh status</Button>
-        <Button disabled={busy || !threadId} onClick={() => void act(() => rpc.call('start', { threadId, intervalMinutes: Number(minutes), durationHours: Number(hours) }))}>Enable paid keepalive</Button>
+        <Button disabled={busy || !threadId} onClick={() => void act(() => rpc.call('start', { threadId, durationHours: Number(hours) }))}>Enable paid keepalive</Button>
         <Button disabled={busy || !threadId} variant="outline" onClick={() => void act(() => rpc.call('stop', { threadId }))}>Stop keepalive</Button>
       </div>
     </section>
@@ -83,6 +82,7 @@ function CacheWatchPage() {
   </div>;
 }
 export default definePluginApp(app => {
+  registerKeepaliveCommands(app);
   app.slots.navPanel({ id: 'cache-watch', title: 'Cache Watch', icon: 'Flame', path: 'cache-watch', component: CacheWatchPage });
   app.slots.experimental_threadContextCardSection({
     id: 'cache-usage', title: 'Prompt cache', group: '0_cache', component: ThreadCacheCard,
