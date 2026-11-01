@@ -27,6 +27,13 @@
     "lib",
     "hooks",
     "core.ts",
+    "cost.ts",
+    "turn-usage.ts",
+    "statistics.ts",
+    "statistics-ui.tsx",
+    "statistics.test.ts",
+    "turn-usage.test.ts",
+    "cost.test.ts",
     "server.test.ts",
     "app.test.tsx",
     "vitest.config.ts"

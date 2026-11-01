@@ -6,7 +6,9 @@ import {
   type ExperimentalThreadContextCardProps,
   type ExperimentalThreadContextSegmentProps,
 } from '@get-bb/plugin-sdk/app';
+import type { TurnUsage } from './turn-usage';
 import type { CacheStatus, rpcContract } from './server';
+import { costRange, usd, PRICING_URL, type CostEstimate } from './cost';
 
 function tokens(value: number | null | undefined): string {
   return value == null ? 'Not reported' : value.toLocaleString();
@@ -14,7 +16,19 @@ function tokens(value: number | null | undefined): string {
 function timestamp(value: number | null | undefined): string {
   return value == null ? 'Unknown' : new Date(value).toLocaleString();
 }
-const explanation = 'Latest provider usage report; may combine several requests in one turn. These counts do not measure the size of a live cache. Viewing this panel does not warm the cache.';
+const explanation = 'Read/write totals cover the latest turn through its last usage report. Expanded details show each request and cache use on the first request. Reports may combine requests. These counts do not measure live cache size.';
+
+export function cacheResult(readTokens: number | null | undefined): 'hit' | 'miss' | 'unknown' {
+  if (readTokens == null || !Number.isFinite(readTokens) || readTokens < 0) return 'unknown';
+  return readTokens > 0 ? 'hit' : 'miss';
+}
+
+export function LastCacheUse({ readTokens }: { readTokens: number | null | undefined }) {
+  const result = cacheResult(readTokens);
+  return <span className={result === 'hit' ? 'text-green-700 dark:text-green-400' : 'text-muted-foreground'}>
+    {result === 'hit' ? 'Yes — provider reported cache reads' : result === 'miss' ? 'No — provider reported zero cache reads' : 'Not reported by provider'}
+  </span>;
+}
 
 export function remainingTime(expiresAt: number | null | undefined, now: number): string {
   if (expiresAt == null || !Number.isFinite(expiresAt)) return 'TTL not reported';
@@ -109,19 +123,59 @@ function KeepaliveControls({ threadId, status, refresh }: { threadId: string; st
   </div>;
 }
 
-function CachePanel({ threadId, card = false }: { threadId: string; card?: boolean }) {
+export function CostDetails({ cost }: { cost: CostEstimate | null | undefined }) {
+  if (!cost) return null;
+  return <div className="space-y-2 border-t pt-2 text-xs" aria-label="Estimated turn cost">
+    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+      <dt className="text-muted-foreground">Turn cost (API estimate)</dt><dd className="text-right tabular-nums">{costRange(cost)}</dd>
+      {cost.minUsd !== null && <>
+        <dt className="text-muted-foreground">Cache read savings (estimate)</dt><dd className="text-right tabular-nums">{usd(cost.readSavingsUsd)}</dd>
+        <dt className="text-muted-foreground">Turn input cache hit</dt><dd className="text-right tabular-nums">{cost.hitRate === null ? 'No input tokens' : `${(cost.hitRate * 100).toFixed(1)}%`}</dd>
+      </>}
+      {cost.model && <><dt className="text-muted-foreground">Cost model</dt><dd className="break-all text-right">{cost.model}</dd></>}
+    </dl>
+    <p className="text-muted-foreground">{cost.note}</p>
+    <p className="text-muted-foreground">USD · <a href={cost.pricingUrl ?? PRICING_URL} target="_blank" rel="noreferrer" className="underline">{cost.pricingLabel ?? 'OpenAI Standard API rates'}</a> · {cost.pricingDate}</p>
+  </div>;
+}
+
+export function TurnUsageDetails({ turn }: { turn: TurnUsage | null | undefined }) {
+  if (!turn) return null;
+  const thousands = (value: number | null) => value === null ? '?' : `${Math.round(value / 1000)}k`;
+  const visibleSteps = (key: 'readTokens' | 'writeTokens') =>
+    turn.steps.filter(step => step.source !== 'aggregate-remainder' || step[key] !== 0);
+  const equation = (key: 'readTokens' | 'writeTokens') =>
+    `${visibleSteps(key).map(step => `${thousands(step[key])}${step.combined || step.source === 'aggregate-remainder' ? '*' : ''}${step.incomplete && step.source !== 'aggregate-remainder' ? '†' : ''}`).join(' + ') || '0k'} = ${thousands(turn[key])}`;
+  const displayed = [...visibleSteps('readTokens'), ...visibleSteps('writeTokens')];
+  const hasCombined = displayed.some(step => step.combined || step.source === 'aggregate-remainder');
+  const hasIncomplete = displayed.some(step => step.incomplete && step.source !== 'aggregate-remainder');
+  const sources = turn.steps.map((step, index) => `${index + 1}: ${step.source ?? 'report'}${step.incomplete && step.source !== 'aggregate-remainder' ? ' (incomplete)' : ''} · ${step.model ?? 'model unreported'} · ${step.messageId ?? 'no message ID'} · cache ${step.combined ? 'combined/unknown request' : cacheResult(step.readTokens)}`).join('\n');
+  return <div className="space-y-2 border-t pt-2 text-xs" aria-label="Per-request cache usage">
+    {turn.note && <p className="text-muted-foreground">{turn.note}</p>}
+    {turn.steps.length > 0 && <>
+      <p title={sources} className="break-words font-mono tabular-nums">Read (≈): {equation('readTokens')}</p>
+      <p title={sources} className="break-words font-mono tabular-nums">Written (≈): {equation('writeTokens')}</p>
+      {(hasCombined || hasIncomplete) && <p className="text-muted-foreground">{hasCombined ? '* Combined or unattributed usage, not one request.' : ''}{hasCombined && hasIncomplete ? ' ' : ''}{hasIncomplete ? '† Incomplete observed request.' : ''}</p>}
+      <p className="text-muted-foreground">k = 1,000 tokens, rounded. ? = unreported. Written: provider-reported counts; zero does not prove no cache was created.</p>
+    </>}
+  </div>;
+}
+
+function CachePanel({ threadId, card = false, sessionAction }: { threadId: string; card?: boolean; sessionAction?: ReactNode }) {
   const { status, error, fetching, refresh } = useThreadCache(threadId);
   const sample = status?.sample;
   const remaining = useRemainingTime(status?.estimatedExpiresAt);
   const assumed = status?.expirySource === 'codex-assumption';
   const rows: [string, ReactNode][] = [
-    ['Cache read', tokens(sample?.readTokens)],
-    ['Cache written', tokens(sample?.writeTokens)],
+    ['Cache used (first request)', <LastCacheUse readTokens={status?.turn?.firstReadTokens} />],
+    ['Turn cache read', tokens(status?.turn?.readTokens)],
+    ['Turn cache written', tokens(status?.turn?.writeTokens)],
     ['Last report', sample ? timestamp(sample.at) : 'Not reported'],
     ['Time left (estimate)', <TimeLeft remaining={remaining} assumed={assumed} />],
     ['Estimated expiry', <span className={remaining.color}>{timestamp(status?.estimatedExpiresAt)}</span>],
   ];
   return <div className={card ? 'space-y-1' : 'space-y-2 p-3 text-xs'} aria-label="Thread cache usage">
+    {sessionAction && <div className="px-3 pb-2">{sessionAction}</div>}
     {!status && !error ? <p className="px-3 text-xs text-muted-foreground">Loading cache usage…</p> : card ? rows.map(([label, value]) =>
       <ContextRow key={label} label={label} trailing={<span className="tabular-nums">{value}</span>} />,
     ) : <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
@@ -129,17 +183,19 @@ function CachePanel({ threadId, card = false }: { threadId: string; card?: boole
     </dl>}
     {error && <p role="status" className="px-3 text-xs text-muted-foreground">Cache usage unavailable.{status ? ' Showing the last report.' : ''}</p>}
     <div className="flex items-center justify-between gap-2 px-3 pt-1 text-xs text-muted-foreground">
-      <span title={explanation}>Latest report · not live cache state</span>
+      <span title={explanation}>Provider-reported cache use</span>
       <button type="button" aria-label="Refresh cache usage" title="Refresh cache usage" disabled={fetching} onClick={() => void refresh()} className="shrink-0 rounded p-1 hover:text-foreground disabled:opacity-50">
         <Icon name="RotateCcw" className={`size-3.5${fetching ? ' animate-spin' : ''}`} />
       </button>
     </div>
+    <TurnUsageDetails turn={status?.turn} />
+    <CostDetails cost={status?.cost} />
     <KeepaliveControls key={threadId} threadId={threadId} status={status} refresh={refresh} />
   </div>;
 }
 
-export function ThreadCacheCard({ threadId }: ExperimentalThreadContextCardProps) {
-  return <CachePanel key={threadId} threadId={threadId} card />;
+export function ThreadCacheCard({ threadId, sessionAction }: ExperimentalThreadContextCardProps & { sessionAction?: ReactNode }) {
+  return <CachePanel key={threadId} threadId={threadId} sessionAction={sessionAction} card />;
 }
 export function ThreadCacheSummary({ threadId, onToggle, isExpanded }: ExperimentalThreadContextSegmentProps) {
   const { status, error } = useThreadCache(threadId);
@@ -147,11 +203,15 @@ export function ThreadCacheSummary({ threadId, onToggle, isExpanded }: Experimen
   const remaining = useRemainingTime(status?.estimatedExpiresAt);
   const assumed = status?.expirySource === 'codex-assumption';
   const compact = (value: number | null | undefined) => value == null ? '?' : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-  const label = sample ? `Cache: ${compact(sample.readTokens)} read · ${compact(sample.writeTokens)} written` : error ? 'Cache unavailable' : status ? 'Cache: no usage reported' : 'Loading cache…';
-  return <button type="button" onClick={onToggle} aria-expanded={isExpanded} title={`${label}\n${remaining.text}\nEstimated expiry: ${timestamp(status?.estimatedExpiresAt)}${assumed ? `\n${assumptionNote}` : ''}${error && sample ? '\nReport may be outdated' : ''}\n${explanation}`} className="ml-auto inline-flex min-w-0 items-center justify-end gap-1.5 text-right text-xs text-muted-foreground hover:text-foreground">
+  const turn = status?.turn;
+  const label = turn?.steps.length ? `Cache: ${compact(turn.readTokens)} read · ${compact(turn.writeTokens)} written` : error ? 'Cache unavailable' : status ? 'Cache: waiting for turn usage' : 'Loading cache…';
+  return <button type="button" onClick={onToggle} aria-expanded={isExpanded} title={`${label} (whole turn)\nReported: ${timestamp(sample?.at)}\nTurn cache read: ${tokens(turn?.readTokens)} tokens\nTurn cache written: ${tokens(turn?.writeTokens)} tokens\n${remaining.text}\nEstimated expiry: ${timestamp(status?.estimatedExpiresAt)}${assumed ? `\n${assumptionNote}` : ''}${error && sample ? '\nReport may be outdated' : ''}\n${explanation}`} className={`ml-auto flex min-h-6 min-w-0 flex-1 cursor-pointer items-center gap-1.5 overflow-hidden rounded px-2 py-1 text-left text-xs transition-colors hover:bg-state-hover hover:text-foreground focus-visible:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isExpanded ? 'text-foreground' : 'text-muted-foreground'}`}>
     <Icon name="Database" className="size-3.5 shrink-0" /><span className="truncate">{label}{sample ? <> · <TimeLeft remaining={remaining} assumed={assumed} /></> : null}{error && sample ? ' · stale' : ''}</span>
+    <Icon name={isExpanded ? 'ChevronUp' : 'ChevronDown'} aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
   </button>;
 }
-export function ThreadCacheDetails({ threadId, isExpanded }: ExperimentalThreadContextSegmentProps) {
-  return isExpanded ? <CachePanel key={threadId} threadId={threadId} /> : null;
+export function ThreadCacheDetails({ threadId, isExpanded, sessionAction }: ExperimentalThreadContextSegmentProps & { sessionAction?: ReactNode }) {
+  return isExpanded ? <div role="region" aria-label="Cache details" className="flex min-h-0 flex-col overflow-hidden" style={{ maxHeight: 'min(50dvh, 28rem)' }}>
+    <div className="min-h-0 overflow-y-auto overscroll-contain"><CachePanel key={threadId} threadId={threadId} sessionAction={sessionAction} /></div>
+  </div> : null;
 }

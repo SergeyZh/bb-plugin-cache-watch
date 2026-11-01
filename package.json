@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-cache-watch",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
@@ -63,6 +63,10 @@
   "files": [
     "server.ts",
     "core.ts",
+    "cost.ts",
+    "turn-usage.ts",
+    "statistics.ts",
+    "statistics-ui.tsx",
     "app.tsx",
     "thread-cache.tsx",
     "keepalive-commands.tsx",

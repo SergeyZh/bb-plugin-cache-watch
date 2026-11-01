@@ -1,23 +1,29 @@
 import { defineRpcContract, type BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
+import { collectTurnUsage, turnUsageSchema } from './turn-usage';
+import { createStatistics, savedTurnSchema, sessionStatisticsSchema } from './statistics';
+import { costSchema, estimateTurnCost } from './cost';
 import { PING, watchInput, watchSchema, sampleSchema, nextPingAt, estimateExpiry, eligible, type Sample, type Watch } from './core';
 
 const idInput = z.object({ threadId: watchInput.shape.threadId }).strict();
 const statusSchema = z.object({
   threadId: z.string(), title: z.string(), providerId: z.string(), status: z.string(),
-  sample: sampleSchema.nullable(), estimatedExpiresAt: z.number().nullable(),
+  turn: turnUsageSchema, cost: costSchema, sample: sampleSchema.nullable(), estimatedExpiresAt: z.number().nullable(),
   expirySource: z.enum(['provider', 'codex-assumption']).nullable(),
   watch: watchSchema.nullable(), nextPingAt: z.number().nullable(),
 });
 export type CacheStatus = z.infer<typeof statusSchema>;
 export const rpcContract = defineRpcContract({
   status: { input: idInput, output: statusSchema },
+  session: { input: idInput.extend({ beforeSeq: z.number().int().positive().optional() }), output: sessionStatisticsSchema },
+  turn: { input: idInput.extend({ turnId: z.string().min(1).max(256) }), output: savedTurnSchema.nullable() },
   list: { input: z.null(), output: z.array(watchSchema) },
   start: { input: watchInput, output: watchSchema },
   stop: { input: idInput, output: z.object({ stopped: z.boolean() }) },
 });
 
 export default async function plugin(bb: BbPluginApi) {
+  const statistics = createStatistics(bb);
   const KEY = 'watches-v1';
   // Migrate persisted fixed-interval leases to expiry scheduling on reload.
   const storedWatch = watchSchema.extend({ intervalMinutes: z.number().int().min(2).max(55).optional() })
@@ -37,20 +43,37 @@ export default async function plugin(bb: BbPluginApi) {
     await bb.storage.kv.set(KEY, watches);
     bb.realtime.publish('changed', null);
   }
-  async function sample(threadId: string): Promise<Sample | null> {
+  async function sample(threadId: string, providerId?: string): Promise<Sample | null> {
     const rows = await bb.sdk.threads.events.list({ threadId, order: 'desc', limit: '1', types: ['thread/tokenUsage/updated'] });
     const row = rows[0];
     if (!row || row.type !== 'thread/tokenUsage/updated') return null;
     const usage = row.data.tokenUsage;
     return {
-      at: row.createdAt, readTokens: usage.last.cacheReadInputTokens ?? usage.last.cachedInputTokens,
+      at: row.createdAt, readTokens: (providerId === 'claude-code' || providerId === 'claude-code-telemetry') ? usage.last.cacheReadInputTokens ?? null : usage.last.cacheReadInputTokens ?? usage.last.cachedInputTokens,
       writeTokens: usage.last.cacheWriteInputTokens ?? null,
       inputTokens: usage.last.inputTokens, ttlMs: usage.promptCacheTtlMs ?? null,
     };
   }
+  async function costHistory(threadId: string) {
+    const rows: Awaited<ReturnType<typeof bb.sdk.threads.events.list>> = [];
+    let beforeSeq: string | undefined;
+    // The SDK accepts at most 100 rows per page. Keep the entire lookup bounded.
+    for (let page = 0; page < 5; page++) {
+      const batch = await bb.sdk.threads.events.list({ threadId, order: 'desc', limit: '100', beforeSeq,
+        types: ['thread/tokenUsage/updated', 'turn/started', 'client/turn/requested', 'client/turn/rejected', 'provider/modelFallback', 'thread/extensionState/updated'] });
+      if (!batch.length) break;
+      rows.push(...batch);
+      const oldest = Math.min(...batch.map(row => row.seq));
+      if (batch.length < 100 || !Number.isSafeInteger(oldest) || (beforeSeq !== undefined && oldest >= Number(beforeSeq))) break;
+      beforeSeq = String(oldest);
+    }
+    return rows;
+  }
   async function status(threadId: string): Promise<CacheStatus> {
-    const [thread, last, context] = await Promise.all([
-      bb.sdk.threads.get({ threadId }), sample(threadId), bb.sdk.threads.context({ threadId }),
+    const thread = await bb.sdk.threads.get({ threadId });
+    const [last, context, costRows] = await Promise.all([
+      sample(threadId, thread.providerId), bb.sdk.threads.context({ threadId }),
+      costHistory(threadId),
     ]);
     const watch = watches.find(w => w.threadId === threadId) ?? null;
     const expiry = estimateExpiry(thread.providerId, last, context.usage?.compactionOfferAt);
@@ -58,7 +81,7 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       threadId, title: thread.title ?? thread.titleFallback ?? threadId,
       providerId: thread.providerId, status: thread.runtime.displayStatus,
-      sample: last, estimatedExpiresAt: expiry.at,
+      turn: collectTurnUsage(costRows, thread.providerId), cost: estimateTurnCost(thread.providerId, costRows), sample: last, estimatedExpiresAt: expiry.at,
       expirySource: expiry.source,
       watch, nextPingAt: watch && !watch.disabled && watch.until > Date.now() && expiry.at !== null && expiry.at > Date.now() && due !== null && due < watch.until ? due : null,
     };
@@ -89,6 +112,8 @@ export default async function plugin(bb: BbPluginApi) {
   }
   bb.rpc.register(rpcContract, {
     status: ({ threadId }) => status(threadId),
+    session: async ({ threadId, beforeSeq }) => { await statistics.sync(threadId); return statistics.session(threadId, beforeSeq); },
+    turn: async ({ threadId, turnId }) => { await statistics.sync(threadId); return statistics.turn(threadId, turnId); },
     list: () => watches,
     start: input => serial(() => start(input)),
     stop: ({ threadId }) => serial(() => stop(threadId)),

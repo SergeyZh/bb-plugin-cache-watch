@@ -12,7 +12,7 @@ export const watchSchema = watchInput.omit({ durationHours: true }).extend({
 });
 export type Watch = z.infer<typeof watchSchema>;
 export const sampleSchema = z.object({
-  at: z.number(), readTokens: z.number(), writeTokens: z.number().nullable(),
+  at: z.number(), readTokens: z.number().nullable(), writeTokens: z.number().nullable(),
   inputTokens: z.number(), ttlMs: z.number().nullable(),
 });
 export type Sample = z.infer<typeof sampleSchema>;
@@ -28,7 +28,7 @@ export function estimateExpiry(providerId: string, sample: Sample | null, offer?
   if (Number.isFinite(deadline)) return { at: deadline, source: 'provider' as const };
   if (sample?.ttlMs && sample.ttlMs > 0) return { at: sample.at + sample.ttlMs, source: 'provider' as const };
   if ((providerId === 'codex' || providerId === 'central-codex') && sample
-    && (sample.readTokens > 0 || (sample.writeTokens ?? 0) > 0))
+    && ((sample.readTokens ?? 0) > 0 || (sample.writeTokens ?? 0) > 0))
     return { at: sample.at + 30 * 60_000, source: 'codex-assumption' as const };
   return { at: null, source: null };
 }

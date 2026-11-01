@@ -250,3 +250,28 @@ describe('Cache Watch lifecycle', () => {
     expect(result.violations).toEqual([]); expect(result.privateDependencies).toEqual([]);
   });
 });
+
+it('exposes a full-turn estimate through status RPC and CLI without sending a turn', async () => {
+  const h = await setup();
+  h.setThread({ ...h.thread(), providerId: 'codex' });
+  const total = { inputTokens: 10000, cachedInputTokens: 8000, outputTokens: 1000, reasoningOutputTokens: 500, totalTokens: 11000, cacheWriteInputTokens: 0 };
+  const rows = [
+    { seq: 1, type: 'client/turn/requested', data: { execution: { model: 'gpt-6.1-sol' }, requestId: 'r1' } },
+    { seq: 2, type: 'turn/started', scope: { kind: 'turn', turnId: 't1' } },
+    { seq: 3, createdAt: baseTime, type: 'thread/tokenUsage/updated', scope: { kind: 'turn', turnId: 't1' },
+      data: { providerThreadId: 'session1', tokenUsage: { last: total, total } } },
+  ];
+  // More than one host page, including repeated usage notifications.
+  for (let seq = 4; seq <= 123; seq++) rows.push({ ...rows[2], seq });
+  h.harness.sdk.stub('threads.events.list', async (input: { types?: readonly string[]; limit?: string; beforeSeq?: string }) => {
+    if (Number(input.limit) > 100) throw new Error('Host page limit exceeded');
+    return rows.filter(row => input.types?.includes(row.type) && (input.beforeSeq === undefined || row.seq < Number(input.beforeSeq)))
+      .reverse().slice(0, Number(input.limit));
+  });
+  const result = await h.harness.behavior.callRpc('status', { threadId });
+  expect(result).toMatchObject({ turn: { readTokens: 8000, writeTokens: 0, firstReadTokens: 8000, steps: [{ readTokens: 8000, writeTokens: 0 }] }, cost: { minUsd: 0.0148, maxUsd: 0.0148, readSavingsUsd: 0.0152, hitRate: 0.8 } });
+  const cli = await h.harness.behavior.runCli(['status', threadId, '--json']);
+  expect(cli.exitCode).toBe(0);
+  expect(JSON.parse(cli.stdout!)).toEqual(result);
+  expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
+});

@@ -1,6 +1,6 @@
-See the latest reported prompt-cache reads, writes, and estimated time left
+See whole-turn prompt-cache reads, writes, and estimated time left
 directly above each thread's composer. Expand the right-aligned Cache summary
-for exact counts and the report timestamp. The context-card layout includes
+for rounded per-request sums, first-request cache use, and cost estimates. The context-card layout includes
 the same data in a Prompt cache section.
 
 ## Cache estimates
@@ -10,6 +10,19 @@ is in the future; red means it has passed. These are estimates, not a live cache
 status check. For Codex and Central Codex, missing expiry uses a visibly marked
 30-minute assumption when cache activity was reported. Other missing telemetry
 stays unknown. Reports can aggregate several model requests in one turn.
+
+## Session history and costs
+
+Open session statistics from the Cache panel or saved turn details from the
+Cache marker beside an assistant reply. Local statistics retain token usage,
+cache reads/writes, estimated costs, and separate keepalive totals; missing
+telemetry remains visible. The statistics database does not store prompts or replies.
+
+Codex, Central Codex, Claude Code, and the separately installed Claude Code
+Telemetry provider use provider-specific Standard API reference prices. These
+are estimates, not subscription charges. Claude Code Telemetry exposes individual
+requests; native Claude Code reports turn aggregates. Retained BB events can be
+backfilled, but usage missing from the provider/history cannot be recovered.
 
 ## Optional keepalive
 

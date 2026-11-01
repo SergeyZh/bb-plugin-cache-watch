@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0 — 2026-11-01
+
+- Sum cache read/write counters over the entire turn, skip duplicate usage
+  notifications, and show compact rounded formulas in expanded details. Cache
+  reuse refers to the first request; unknown or aggregate-only reports stay unknown.
+- Add Standard API cost estimates for Codex, Central Codex, Claude Code, and
+  Claude Code Telemetry, including input/output, cache reads, write-cost bounds,
+  rate provenance, and explicit gaps in attribution. Estimates are not subscription charges.
+- Integrate Claude Code Telemetry per-request metadata across THREAD/TURN scopes,
+  first-request cache hits, actual-model Anthropic pricing, and incomplete usage.
+  Mark aggregate remainders with * and omit exact-zero remainder terms;
+  retain † only for incomplete observed requests. Preserve native Claude Code aggregates.
+- Save usage and turn statistics in SQLite, backfill retained event history,
+  and migrate historical snapshots. Show session token/cache/cost totals,
+  missing telemetry coverage, separate keepalive totals, and paginated turn history.
+  Conversation prompts and replies are not stored in the statistics database.
+- Add Cache markers beside assistant replies with saved turn details, plus
+  session statistics accessible directly from the session's Cache panel/card.
+- Bound detail dialogs and composer expansion with scrolling, fix standalone
+  page scrolling, and clarify session selection. Add a disclosure arrow and
+  Git-style hover/focus highlighting; remove the redundant composer Close button.
+- Expand regression coverage to 78 tests across accounting, persistence,
+  provider integration, session controls, and disclosure behavior.
+
 ## 0.2.0
 
 - Direct Keepalive palette commands for status, enable, renew, and stop, with

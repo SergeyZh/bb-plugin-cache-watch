@@ -101,3 +101,27 @@ No Claude settings were changed during the investigation.
 - Live keepalive behavior for providers other than Central Codex.
 - Restart and dispatch-race behavior outside the fake-host tests.
 - An exact live cache state: all TTLs are estimates.
+
+
+## Claude Code Telemetry integration (2026-11-01)
+
+- Typecheck and 78 tests pass, including native Claude/Codex regressions.
+- Tests cover THREAD-scope metadata paired with TURN-scope usage, consumed/stale/
+  malformed metadata, first miss followed by hits, incomplete requests, aggregate
+  remainders, actual per-request models and mixed-model pricing.
+- SQLite tests verify source/ID/model persistence across reload, 100-row page
+  boundaries, historical metadata backfill after an old cursor, and exclusion of
+  unrelated extension payloads. Compact formulas mark remainders/incomplete
+  observations without adding a request table.
+- No Claude Code Telemetry BB threads existed during this integration check.
+  A paid end-to-end BB UI turn was not started, and existing Claude Code providers
+  or other active sessions were not restarted. The provider repository has its
+  own SDK live-accounting verification; this does not substitute for a BB UI run.
+
+## Release 0.3.0 checks (2026-11-01)
+
+- Clean dependency install with Node 24.17.0 and a temporary npm cache.
+- Typecheck, all 78 tests, SDK pin check, plugin build, package dry run, and
+  whitespace validation passed. The package includes the new accounting and
+  statistics modules, app/server metadata, skills, and license notices.
+- No paid keepalive or new provider turn was started for release validation.

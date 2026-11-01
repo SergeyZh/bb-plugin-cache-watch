@@ -1,9 +1,13 @@
 # Publishing to GitHub
 
-The package is prepared for its first experimental release, version 0.1.0.
-The intended GitHub repository is `SergeyZh/bb-plugin-cache-watch`, matching
-the account used by the neighboring BB plugin. Package metadata and the local
-`origin` remote already point there.
+Releases are published to `SergeyZh/bb-plugin-cache-watch` as Git tags and
+GitHub prereleases while the plugin is experimental. Version 0.3.0 adds
+turn/session statistics, provider cost estimates, and Claude Code Telemetry support.
+
+For subsequent releases, complete the checks below, commit the version, lockfile,
+CHANGELOG and source changes, then push `main`. Wait for GitHub Actions to pass
+before creating and pushing the matching immutable `vX.Y.Z` tag. Create a GitHub
+prerelease from that tag using its CHANGELOG entry as the release notes.
 
 ## First publication
 
