@@ -275,3 +275,42 @@ it('exposes a full-turn estimate through status RPC and CLI without sending a tu
   expect(JSON.parse(cli.stdout!)).toEqual(result);
   expect(h.harness.inspection.sdk.callsTo('threads.send')).toHaveLength(0);
 });
+
+it('persists the status template across reloads and rejects invalid template syntax', async () => {
+  const host = await setup();
+  const initial = await host.harness.behavior.callRpc('getStatusTemplate', null);
+  expect(initial).toEqual({ template: expect.stringContaining('{{ttl}}') });
+  const template = '{{#if firstRequest == "hit"}}✓{{else}}?{{/if}} {{cost | usd:2}}';
+  await host.harness.behavior.callRpc('setStatusTemplate', { template });
+  expect(await host.harness.behavior.callRpc('getStatusTemplate', null)).toEqual({ template });
+  const reloaded = await host.harness.lifecycle.reload(plugin);
+  hosts.push(reloaded);
+  expect(await reloaded.harness.behavior.callRpc('getStatusTemplate', null)).toEqual({ template });
+  await expect(reloaded.harness.behavior.callRpc('setStatusTemplate', { template: '{{missing}}' })).rejects.toThrow();
+  expect(await reloaded.harness.behavior.callRpc('getStatusTemplate', null)).toEqual({ template });
+});
+
+it('stores header and context templates independently without changing an existing header template', async () => {
+  const host = await setup();
+  const header = 'Header {{ttl}}';
+  const context = 'Context {{firstRequest}} {{cost | usd:2}}';
+  await host.harness.behavior.callRpc('setStatusTemplate', { template: header });
+  const original = await host.harness.behavior.callRpc('getStatusTemplate', { surface: 'context' });
+  expect(original).toEqual({ template: expect.stringContaining('{{readTokens | compact}}') });
+  await host.harness.behavior.callRpc('setStatusTemplate', { surface: 'context', template: context });
+  expect(await host.harness.behavior.callRpc('getStatusTemplate', null)).toEqual({ template: header });
+  const reloaded = await host.harness.lifecycle.reload(plugin);
+  hosts.push(reloaded);
+  expect(await reloaded.harness.behavior.callRpc('getStatusTemplate', { surface: 'header' })).toEqual({ template: header });
+  expect(await reloaded.harness.behavior.callRpc('getStatusTemplate', { surface: 'context' })).toEqual({ template: context });
+});
+
+it('upgrades only the previous context default to selective monospace markers', async () => {
+  const { LEGACY_CONTEXT_TEMPLATE, DEFAULT_CONTEXT_TEMPLATE } = await import('./status-template');
+  const host = await setup();
+  await host.harness.behavior.callRpc('setStatusTemplate', { surface: 'context', template: LEGACY_CONTEXT_TEMPLATE });
+  expect(await host.harness.behavior.callRpc('getStatusTemplate', { surface: 'context' })).toEqual({ template: DEFAULT_CONTEXT_TEMPLATE });
+  const custom = 'Custom {{ttl}}';
+  await host.harness.behavior.callRpc('setStatusTemplate', { surface: 'context', template: custom });
+  expect(await host.harness.behavior.callRpc('getStatusTemplate', { surface: 'context' })).toEqual({ template: custom });
+});

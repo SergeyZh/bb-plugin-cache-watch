@@ -179,3 +179,9 @@ export function costRange(cost: CostEstimate | null | undefined): string {
   if (cost?.minUsd == null || cost.maxUsd == null) return 'Unavailable';
   return Math.abs(cost.maxUsd - cost.minUsd) < 1e-10 ? usd(cost.minUsd) : `${usd(cost.minUsd)}–${usd(cost.maxUsd)}`;
 }
+
+/** Compact estimate only; detailed views retain the full range. */
+export function compactCost(cost: CostEstimate | null | undefined): string {
+  if (cost?.minUsd == null || cost.maxUsd == null) return 'Unavailable';
+  return `$${((cost.minUsd + cost.maxUsd) / 2).toFixed(2)}`;
+}

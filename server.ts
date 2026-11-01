@@ -1,5 +1,6 @@
 import { defineRpcContract, type BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
+import { defaultStatusTemplate, DEFAULT_CONTEXT_TEMPLATE, LEGACY_CONTEXT_TEMPLATE, validateStatusTemplate } from './status-template';
 import { collectTurnUsage, turnUsageSchema } from './turn-usage';
 import { createStatistics, savedTurnSchema, sessionStatisticsSchema } from './statistics';
 import { costSchema, estimateTurnCost } from './cost';
@@ -13,7 +14,10 @@ const statusSchema = z.object({
   watch: watchSchema.nullable(), nextPingAt: z.number().nullable(),
 });
 export type CacheStatus = z.infer<typeof statusSchema>;
+const statusTemplateSchema = z.string().min(1).max(4096).refine(value => validateStatusTemplate(value) === null, 'Invalid status template.');
 export const rpcContract = defineRpcContract({
+  getStatusTemplate: { input: z.object({ surface: z.enum(['header', 'context']) }).strict().nullable(), output: z.object({ template: z.string() }) },
+  setStatusTemplate: { input: z.object({ template: statusTemplateSchema, surface: z.enum(['header', 'context']).optional() }).strict(), output: z.object({ template: z.string() }) },
   status: { input: idInput, output: statusSchema },
   session: { input: idInput.extend({ beforeSeq: z.number().int().positive().optional() }), output: sessionStatisticsSchema },
   turn: { input: idInput.extend({ turnId: z.string().min(1).max(256) }), output: savedTurnSchema.nullable() },
@@ -23,6 +27,19 @@ export const rpcContract = defineRpcContract({
 });
 
 export default async function plugin(bb: BbPluginApi) {
+  bb.settings.define({
+    cacheShowBelowSeconds: {
+      type: 'number', label: 'Show cache when TTL is at most (seconds)', default: 0,
+      description: 'Hide cache information while the estimated TTL is above this threshold. 0 means always show. Unknown or elapsed TTL remains visible.',
+      experimental_schema: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    },
+    cachePlacement: {
+      type: 'select', label: 'Cache information position', default: 'context',
+      options: ['context', 'header'],
+      experimental_optionLabels: { context: 'Current position (thread context)', header: 'Thread header' },
+      description: 'The bottom status bar and native window title do not expose plugin slots in this BB version. On narrow screens the header button appears in the thread menu.',
+    },
+  });
   const statistics = createStatistics(bb);
   const KEY = 'watches-v1';
   // Migrate persisted fixed-interval leases to expiry scheduling on reload.
@@ -111,6 +128,17 @@ export default async function plugin(bb: BbPluginApi) {
     return { stopped: watches.length !== oldLength };
   }
   bb.rpc.register(rpcContract, {
+    getStatusTemplate: async input => {
+      const surface = input?.surface ?? 'header';
+      const key = surface === 'header' ? 'status-template-v1' : 'status-template-context-v1';
+      const saved = statusTemplateSchema.safeParse(await bb.storage.kv.get(key));
+      return { template: saved.success ? (surface === 'context' && saved.data === LEGACY_CONTEXT_TEMPLATE ? DEFAULT_CONTEXT_TEMPLATE : saved.data) : defaultStatusTemplate(surface) };
+    },
+    setStatusTemplate: async ({ template, surface = 'header' }) => {
+      await bb.storage.kv.set(surface === 'header' ? 'status-template-v1' : 'status-template-context-v1', template);
+      bb.realtime.publish('template-changed', null);
+      return { template };
+    },
     status: ({ threadId }) => status(threadId),
     session: async ({ threadId, beforeSeq }) => { await statistics.sync(threadId); return statistics.session(threadId, beforeSeq); },
     turn: async ({ threadId, turnId }) => { await statistics.sync(threadId); return statistics.turn(threadId, turnId); },

@@ -85,3 +85,22 @@ For control without invoking the LLM, use BB's command palette
 Show status, Enable paid keepalive for 6 hours, Renew paid keepalive for 6 hours,
 or Stop keepalive. These commands target the selected session and show results
 as notifications. The `/keepalive` skill itself invokes the agent/LLM.
+
+## Display templates
+
+The plugin settings include **Status templates** with separate editors for
+**Thread header** and **Thread context**, presets, Save template, previews, and
+a compact variable/syntax reference. Variables include `hours`, `minutes`,
+`seconds`, `totalSeconds`, `state` (`warm`/`expired`/`unknown`), `firstRequest`
+(`hit`/`miss`/`unknown`), `firstHit` (true/false/null), turn token counts, and
+estimated USD `cost`/`costMin`/`costMax`. Use `{{seconds | pad2}}`,
+`{{cost | usd:2}}`, or `{{#if firstRequest == "hit"}}✓{{else}}?{{/if}}`.
+The Default preset loads the original template for that location; Save template applies it.
+The template is stored by the plugin, separately from declarative CLI settings,
+and survives reloads. It does not alter agent prompts or keepalive scheduling.
+
+Context template formatting: `{{#mono}}…{{/mono}}` marks only that block as
+monospace with the TTL color, for example
+`Cache · {{#mono}}{{minutes | pad2}}:{{seconds | pad2}}{{/mono}} left`.
+Unmarked context text uses the ordinary font. The Default context template
+marks its countdown; the header retains its monospace style and omits markers.

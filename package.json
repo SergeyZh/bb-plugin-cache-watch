@@ -69,6 +69,7 @@
     "statistics-ui.tsx",
     "app.tsx",
     "thread-cache.tsx",
+    "header-cache.tsx",
     "keepalive-commands.tsx",
     "components",
     "lib",
@@ -81,7 +82,10 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "PLUGIN_OVERVIEW.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "status-template.ts",
+    "template-settings.tsx",
+    "status-template-ui.tsx"
   ],
   "description": "Prompt-cache telemetry and opt-in, time-limited paid keepalive for BB threads.",
   "license": "MIT",

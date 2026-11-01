@@ -3,7 +3,7 @@ import { useRealtime, useRpc, type ExperimentalMessageMetadataProps } from '@get
 import type { rpcContract } from './server';
 import type { SavedTurn, SessionStatistics } from './statistics';
 import { CostDetails, LastCacheUse, TurnUsageDetails, cacheResult } from './thread-cache';
-import { costRange, usd } from './cost';
+import { compactCost, costRange, usd } from './cost';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './components/ui/dialog';
 
 const providerName = (providerId: string | undefined) => providerId === 'claude-code-telemetry' ? 'Claude Code Telemetry' : providerId === 'claude-code' ? 'Claude Code' : providerId === 'codex' ? 'Codex' : providerId === 'central-codex' ? 'Central Codex' : providerId ?? 'Provider';
@@ -42,7 +42,7 @@ function TurnMarker({ threadId, turnId }: { threadId: string; turnId: string }) 
   useRealtime('statistics-changed', (payload) => {
     if ((payload as { threadId?: string } | null)?.threadId === threadId && !latest.current?.completed) void refresh();
   });
-  const label = saved ? `Cache · first: ${cacheResult(saved.turn.firstReadTokens)} · ${compact(saved.turn.readTokens)} read${saved.cost.minUsd !== null ? ` · ~${costRange(saved.cost)}` : ''}`
+  const label = saved ? `Cache · first: ${cacheResult(saved.turn.firstReadTokens)} · ${compact(saved.turn.readTokens)} read${saved.cost.minUsd !== null ? ` · ~${compactCost(saved.cost)}` : ''}`
     : error ? 'Cache · unavailable' : 'Cache · collecting';
   return <>
     <button type="button" aria-label={`Turn cache statistics: ${label}`} onClick={() => { setOpen(true); void refresh(); }}

@@ -277,3 +277,77 @@ expiry or net savings.
 
 [MIT](LICENSE). Vendored UI attribution is in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Display position
+
+In **Settings → Plugins → Cache Watch → Cache information position**, choose
+**Current position (thread context)** (default) or **Thread header**. The header
+button shows the estimated TTL and opens the full cache details and keepalive
+controls for that pane's session. On phones and narrow split panes BB moves
+header actions into the thread menu. BB SDK 0.6.104 does not provide a slot for
+the bottom status bar or the native window title.
+
+Expiry countdowns in the header, cache details and context summaries use monospace digits.
+Header labels use a scoped content script because BB renders header action labels as plain text.
+Their text is green while the estimated TTL remains, red after it elapses, and
+muted when the TTL is unknown. These colors reflect the estimate, not a live cache check.
+Response markers show the midpoint of the estimated cost range rounded to two
+decimal places (for example, `~$0.16`); expanded details retain the full range.
+
+Set **Show cache when TTL is at most (seconds)** in the plugin settings to hide
+cache information until the estimated remaining time reaches that threshold.
+The default `0` always shows it. This applies to the header, context summary,
+and context card; unknown or elapsed TTL remains visible. Open details and
+response statistics stay accessible without this filter. The display updates
+every second and hides again when fresh telemetry extends the TTL.
+
+Keepalive duration controls use one-hour steps (1–24 hours). The CLI and RPC
+continue to accept fractional durations down to 0.25 hours.
+
+### Status templates
+
+Open **Settings → Cache Watch → Status templates** to edit the separate
+**Thread header** and **Thread context** templates. Choose Default, Clock, Cache hit and cost, Detailed, or Minimal,
+or write a custom template. Select the **Default** preset to restore the original text for that location;
+**Save template** applies the change to all clients. The editor includes
+previews for warm, expired and unknown TTL, validation, and the full variable
+reference under **Template syntax and variables**. The templates control the
+header button and context row; response markers and expanded statistics keep their detailed UI.
+
+Examples:
+
+```text
+{{hours | pad2}}:{{minutes | pad2}}:{{seconds | pad2}} · {{state}}
+{{#if firstRequest == "hit"}}✓{{else}}{{#if firstRequest == "miss"}}✗{{else}}?{{/if}}{{/if}} · {{cost | usd:2}}
+{{readTokens | compact}} read / {{writeTokens | compact}} written
+```
+
+Use `{{variable}}`, optional filters (`pad2`, `compact`, `fixed:2`, `usd:2`,
+`percent:1`), and nested `{{#if variable == "value"}}…{{else}}…{{/if}}` blocks.
+`!=` and truthiness checks are also supported. Missing numeric values and
+`firstHit` are `null`; compare to `null` to distinguish unknown from false or
+zero. Missing values print `?`. `hours`, `minutes`, and `seconds` are components;
+`totalSeconds` is the full remaining duration. `state` is `warm`, `expired`, or
+`unknown`; `firstRequest` independently reports `hit`, `miss`, or `unknown` for
+the first request of the latest turn. `firstHit` is true, false, or null.
+
+Further variables: `ttlKnown`, `ttl`, `firstReadTokens`, `readTokens`,
+`writeTokens`, `inputTokens`, `outputTokens`, `requests`, `cost`, `costMin`,
+`costMax`, `savings`, `hitRate`, `provider`, `model`, `assumed`, `keepalive`,
+`stale`, `hasUsage`, `hasReport`, `loading`, and `unavailable`. Tokens and estimated USD costs cover the
+latest turn; `cost` is the range midpoint. `hitRate` is a ratio from 0 to 1.
+Colors and the visibility threshold still follow TTL independently of the text.
+Empty rendered output hides the button. Templates are plain text, up to 4096
+characters, with at most 16 nested conditions; output is limited to 512 characters.
+
+For selective monospace text in the context row, wrap a block with
+`{{#mono}}` and `{{/mono}}`:
+
+```text
+Cache: {{readTokens | compact}} read · {{#mono}}{{minutes | pad2}}m {{seconds | pad2}}s{{/mono}} left
+```
+
+Only the marked block uses monospace digits and the TTL color; following text
+returns to the ordinary context font. The Default context preset marks the
+countdown automatically. Header buttons keep their existing monospace styling;
+formatting markers are omitted from the header's visible text.

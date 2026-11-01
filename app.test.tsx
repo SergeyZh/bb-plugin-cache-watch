@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, fireEvent, waitFor } from '@testing-library/react';
-import { loadPluginApp, renderSlot } from '@get-bb/plugin-sdk/testing/app';
+import { act, fireEvent, waitFor, within } from '@testing-library/react';
+import { loadPluginApp, mountPluginContentScripts, renderSlot } from '@get-bb/plugin-sdk/testing/app';
 import appDefinition from './app';
 import { definePluginApp, type PluginCommandRegistration } from '@get-bb/plugin-sdk/app';
 import { experimental_makePanelController } from '@get-bb/plugin-sdk/testing';
@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
-import { remainingTime } from './thread-cache';
+import { cacheIsVisible, remainingTime } from './thread-cache';
 
 const unmounts: (() => void)[] = [];
 afterEach(() => { for (const unmount of unmounts.splice(0)) unmount(); vi.useRealTimers(); });
@@ -27,6 +27,7 @@ it('loads the registered page, shows unknown cache state, and requires opt-in', 
   unmounts.push(() => slot.lifecycle.unmount());
   expect(await slot.findByText('Demo thread')).toBeTruthy();
   expect(await slot.findByText('Keepalive uses ordinary paid turns')).toBeTruthy();
+  expect(slot.getByLabelText('Keep alive for (hours)').getAttribute('step')).toBe('1');
   expect(starts).toEqual([]);
   fireEvent.click(await slot.findByRole('button', { name: 'Enable paid keepalive' }));
   await waitFor(() => expect(starts).toEqual([{ threadId: 'thr_demo123', durationHours: 6 }]));
@@ -143,6 +144,7 @@ it('counts down locally each second and stops at an elapsed estimate', async () 
   unmounts.push(() => slot.lifecycle.unmount());
   expect(slot.getByRole('button', { name: /~1m 01s left/ })).toBeTruthy();
   expect(slot.getByText(/~1m 01s left.*assumed 30m/).className).toContain('text-green-700');
+  expect(slot.getByText(/~1m 01s left.*assumed 30m/).className).toContain('font-mono');
   const initialRequests = requests;
   await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
   expect(slot.getByRole('button', { name: /~1m 00s left/ })).toBeTruthy();
@@ -172,6 +174,7 @@ for (const surface of ['card', 'banner'] as const) {
       : renderSlot({ component: app.threadContextSegments[0]!.details! }, props, options);
     unmounts.push(() => slot.lifecycle.unmount());
     expect(await slot.findByText('Keepalive: Off')).toBeTruthy();
+    expect(slot.getByRole('spinbutton', { name: 'Keepalive duration (hours)' }).getAttribute('step')).toBe('1');
     fireEvent.change(slot.getByRole('spinbutton', { name: 'Keepalive duration (hours)' }), { target: { value: '2' } });
     fireEvent.click(slot.getByRole('button', { name: 'Enable paid keepalive' }));
     expect(await slot.findByText('Keepalive: Enabled')).toBeTruthy();
@@ -477,4 +480,278 @@ it('styles the cache disclosure like Git with a chevron and collapses through th
   fireEvent.click(trigger);
   expect(trigger.getAttribute('aria-expanded')).toBe('false');
   expect(slot.queryByRole('region', { name: 'Cache details' })).toBeNull();
+});
+
+it('rounds the midpoint in a Claude turn marker and retains the full range in details', async () => {
+  const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
+  const saved = savedTurn('claude-turn');
+  const slot = renderSlot(app.messageMetadata[0]!, {
+    message: { id: 'reply', threadId: 'thr_claude123', turnId: 'claude-turn', role: 'assistant', createdAt: 1000 },
+  }, { rpc: { turn: () => ({ ...saved, cost: { ...saved.cost, minUsd: 0.1608, maxUsd: 0.1637 } }) } });
+  unmounts.push(() => slot.lifecycle.unmount());
+  const button = await slot.findByRole('button', { name: /Turn cache statistics:.*~\$0.16$/ });
+  expect(button.textContent).not.toContain('0.1608');
+  fireEvent.click(button);
+  expect(await slot.findByText('$0.1608–$0.1637')).toBeTruthy();
+});
+
+it('moves cache from context to a header action and opens details for the selected pane', async () => {
+  const { registerCacheHeader } = await import('./header-cache');
+  let registration: any;
+  const app = await loadPluginApp(definePluginApp(builder => {
+    registerCacheHeader({ ...builder, slots: { ...builder.slots,
+      experimental_threadAction(value) { registration = value; builder.slots.experimental_threadAction(value); },
+    } });
+  }));
+  expect(registration.placement).toBe('header');
+  const overlay = renderSlot(app.appOverlays[0]!, {} , { rpc: { status: () => cacheStatus('thr_pane123') } });
+  unmounts.push(() => overlay.lifecycle.unmount());
+  function Header() {
+    const data = registration.useData({ threadIds: ['thr_pane123'] });
+    const item = registration.item({ thread: { id: 'thr_pane123' }, data });
+    return item ? <button onClick={() => item.run({})}>{item.label}</button> : null;
+  }
+  const header = renderSlot({ component: Header }, {}, {
+    settings: { cachePlacement: 'header' }, rpc: { status: () => cacheStatus('thr_pane123') },
+  });
+  unmounts.push(() => header.lifecycle.unmount());
+  fireEvent.click(await header.findByRole('button', { name: 'Cache · TTL not reported' }));
+  expect(await overlay.findByRole('dialog', { name: 'Prompt cache' })).toBeTruthy();
+  expect(await overlay.findByText((14590).toLocaleString())).toBeTruthy();
+  expect(overlay.inspection.rpcCalls.every(call => (call.input as { threadId: string }).threadId === 'thr_pane123')).toBe(true);
+  overlay.lifecycle.unmount();
+  header.lifecycle.unmount();
+  const fullApp = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
+  const card = renderSlot(fullApp.threadContextCardSections[0]!, {
+    threadId: 'thr_pane123', projectId: 'proj_test', environment: null,
+  }, { settings: { cachePlacement: 'header' } });
+  unmounts.push(() => card.lifecycle.unmount());
+  expect(card.queryByLabelText('Thread cache usage')).toBeNull();
+  expect(card.inspection.rpcCalls).toHaveLength(0);
+});
+
+it('styles host cache labels by TTL, updates through expiry, and cleans up on reload', async () => {
+  const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
+  const fixture = document.createElement('div');
+  fixture.innerHTML = '<div data-thread-header-workflow-actions><button>Cache · ~1m 11s left</button><button>Commit</button></div><div role="menuitem">Cache · ~2m 08s left · assumed 30m</div><button>Cache · ~1m 11s left</button>';
+  document.body.append(fixture);
+  const scripts = await mountPluginContentScripts(app, { pluginId: 'cache-watch', generation: 1 });
+  try {
+    const header = fixture.querySelector('button')!;
+    const marker = 'data-cache-watch-header-font';
+    expect(header.hasAttribute(marker)).toBe(true);
+    expect(getComputedStyle(header).fontFamily).toContain('monospace');
+    expect(header.getAttribute(marker)).toBe('active');
+    expect(getComputedStyle(header).color).toBe('rgb(21, 128, 61)');
+    expect(fixture.querySelector('[role="menuitem"]')!.hasAttribute(marker)).toBe(true);
+    expect(fixture.querySelectorAll(`[${marker}]`)).toHaveLength(2);
+    header.textContent = 'Cache · ~1m 10s left';
+    await waitFor(() => expect(header.hasAttribute(marker)).toBe(true));
+    header.textContent = 'Cache · Estimated TTL elapsed · assumed 30m';
+    await waitFor(() => expect(header.getAttribute(marker)).toBe('elapsed'));
+    expect(getComputedStyle(header).color).toBe('rgb(185, 28, 28)');
+    document.documentElement.classList.add('dark');
+    try {
+      expect(getComputedStyle(header).color).toBe('rgb(248, 113, 113)');
+    } finally { document.documentElement.classList.remove('dark'); }
+    header.textContent = 'Cache · TTL not reported';
+    await waitFor(() => expect(header.getAttribute(marker)).toBe('unknown'));
+    header.textContent = 'Cache · unavailable';
+    await waitFor(() => expect(header.getAttribute(marker)).toBe('unknown'));
+    header.textContent = 'Cache · ~0m 01s left · stale';
+    await waitFor(() => expect(header.getAttribute(marker)).toBe('active'));
+    expect(fixture.querySelector('[role="menuitem"]')!.getAttribute(marker)).toBe('active');
+    header.textContent = 'Commit';
+    await waitFor(() => expect(header.hasAttribute(marker)).toBe(false));
+    const newHeader = document.createElement('button');
+    newHeader.textContent = 'Cache · ~0m 09s left';
+    fixture.firstElementChild!.append(newHeader);
+    await waitFor(() => expect(newHeader.hasAttribute(marker)).toBe(true));
+    await scripts.lifecycle.dispose();
+    expect(fixture.querySelectorAll(`[${marker}]`)).toHaveLength(0);
+  } finally {
+    await scripts.lifecycle.dispose();
+    fixture.remove();
+  }
+});
+
+it('shows unknown and elapsed TTL, disables filtering at zero, and includes the exact threshold', () => {
+  const now = 1793390345316;
+  expect(cacheIsVisible(now + 61_000, now, 60)).toBe(false);
+  expect(cacheIsVisible(now + 60_000, now, 60)).toBe(true);
+  expect(cacheIsVisible(now + 61_000, now, 0)).toBe(true);
+  expect(cacheIsVisible(null, now, 60)).toBe(true);
+  expect(cacheIsVisible(NaN, now, 60)).toBe(true);
+  expect(cacheIsVisible(now - 1, now, 60)).toBe(true);
+});
+
+for (const surface of ['header', 'banner', 'card'] as const) {
+  it(`reveals the ${surface} at the TTL threshold without waiting for a server poll`, async () => {
+    vi.useFakeTimers();
+    const now = 1793390345316;
+    vi.setSystemTime(now);
+    const threadId = 'thr_threshold123';
+    let expiresAt = now + 61_000;
+    let registration: any;
+    const app = await loadPluginApp(definePluginApp(builder => appDefinition.setup({
+      ...builder, slots: { ...builder.slots, experimental_threadAction(value) {
+        if (value.id === 'cache-header') registration = value;
+        builder.slots.experimental_threadAction(value);
+      } },
+    })));
+    function Header() {
+      const data = registration.useData({ threadIds: [threadId] });
+      const item = registration.item({ thread: { id: threadId }, data });
+      return item ? <button>{item.label}</button> : null;
+    }
+    const props = { threadId, projectId: 'proj_test', environment: null, segments: [], isExpanded: false, onToggle() {} };
+    let requests = 0;
+    let slot!: ReturnType<typeof renderSlot>;
+    await act(async () => {
+      const Card = app.threadContextCardSections[0]!.component;
+      const Summary = app.threadContextSegments[0]!.action!;
+      function Surface() { return surface === 'header' ? <Header /> : surface === 'card' ? <Card {...props} /> : <Summary {...props} />; }
+      slot = renderSlot({ component: Surface }, {}, {
+        settings: { cachePlacement: surface === 'header' ? 'header' : 'context', cacheShowBelowSeconds: 60 },
+        rpc: { status: () => { requests++; return { ...cacheStatus(threadId), estimatedExpiresAt: expiresAt }; } },
+      });
+    });
+    unmounts.push(() => slot.lifecycle.unmount());
+    const visible = () => surface === 'card' ? slot.queryByLabelText('Thread cache usage') : slot.queryByRole('button', { name: /Cache/ });
+    expect(visible()).toBeNull();
+    const initialRequests = requests;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(visible()).toBeTruthy();
+    expect(requests).toBe(initialRequests);
+    expiresAt = now + 300_000;
+    await act(async () => { await slot.behavior.emitRealtime('changed', null); });
+    expect(visible()).toBeNull();
+  });
+}
+
+it('edits, previews, validates, saves presets and restores the default template in settings', async () => {
+  const { DEFAULT_STATUS_TEMPLATE, STATUS_PRESETS, VARIABLES } = await import('./status-template');
+  const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
+  let stored: string = DEFAULT_STATUS_TEMPLATE;
+  const saves: string[] = [];
+  const slot = renderSlot(app.settingsSections[0]!, {}, {
+    rpc: {
+      getStatusTemplate: () => ({ template: stored }),
+      setStatusTemplate: (input: unknown) => {
+        stored = (input as { template: string }).template;
+        saves.push(stored); return { template: stored };
+      },
+    },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  const header = within(slot.getByRole('group', { name: 'Thread header' }));
+  expect(slot.queryByRole('button', { name: 'Default' })).toBeNull();
+  const editor = await header.findByRole('textbox', { name: 'Status template' });
+  await waitFor(() => expect(editor.hasAttribute('disabled')).toBe(false));
+  fireEvent.change(header.getByRole('combobox', { name: 'Status template preset' }), { target: { value: 'Clock' } });
+  expect(header.getByLabelText('Status preview').textContent).toBe('Cache · warm · 00:04:09');
+  fireEvent.change(header.getByRole('combobox', { name: 'Preview cache state' }), { target: { value: 'unknown' } });
+  expect(header.getByLabelText('Status preview').textContent).toBe('Cache · unknown');
+  fireEvent.change(editor, { target: { value: '{{#if firstHit == null}}?{{else}}{{#if firstHit}}✓{{else}}✗{{/if}}{{/if}} {{cost | usd:2}}' } });
+  expect(header.getByLabelText('Status preview').textContent).toBe('? $0.16');
+  fireEvent.change(editor, { target: { value: '{{badVariable}}' } });
+  expect(header.getByRole('alert').textContent).toContain('Unknown variable');
+  expect(header.getByRole('button', { name: 'Save template' }).hasAttribute('disabled')).toBe(true);
+  fireEvent.change(header.getByRole('combobox', { name: 'Status template preset' }), { target: { value: 'Detailed' } });
+  fireEvent.click(header.getByRole('button', { name: 'Save template' }));
+  expect(await slot.findByText('Template saved.')).toBeTruthy();
+  expect(saves[0]).toBe(STATUS_PRESETS.find(preset => preset.name === 'Detailed')!.template);
+  fireEvent.change(header.getByRole('combobox', { name: 'Status template preset' }), { target: { value: 'Default' } });
+  expect((editor as HTMLTextAreaElement).value).toBe(DEFAULT_STATUS_TEMPLATE);
+  fireEvent.click(header.getByRole('button', { name: 'Save template' }));
+  await waitFor(() => expect(saves[1]).toBe(DEFAULT_STATUS_TEMPLATE));
+  for (const name of Object.keys(VARIABLES)) {
+    const term = slot.getByText(name, { selector: 'dt' });
+    expect(term.parentElement!.className).toBe('contents');
+    expect(term.nextElementSibling!.textContent).toBe('-');
+    expect(term.parentElement!.parentElement!.className).toContain('grid-cols-[max-content_auto_minmax(0,1fr)]');
+  }
+});
+
+it('keeps custom header text colored and monospaced independently of its wording', async () => {
+  const { registerCacheHeader } = await import('./header-cache');
+  let registration: any;
+  const app = await loadPluginApp(definePluginApp(builder => {
+    registerCacheHeader({ ...builder, slots: { ...builder.slots, experimental_threadAction(value) {
+      registration = value; builder.slots.experimental_threadAction(value);
+    } } });
+  }));
+  function Header() {
+    const data = registration.useData({ threadIds: ['thr_custom123'] });
+    const item = registration.item({ thread: { id: 'thr_custom123' }, data });
+    return <div data-thread-header-workflow-actions>{item && <button>{item.label}</button>}</div>;
+  }
+  let report = { ...cacheStatus('thr_custom123'), estimatedExpiresAt: Date.now() + 600_000 };
+  const slot = renderSlot({ component: Header }, {}, {
+    settings: { cachePlacement: 'header' },
+    rpc: { getStatusTemplate: () => ({ template: 'Мой кеш: {{state}} · {{seconds | pad2}}' }), status: () => report },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  const scripts = await mountPluginContentScripts(app, { pluginId: 'cache-watch', generation: 1 });
+  try {
+    const button = await slot.findByRole('button', { name: /Мой кеш: warm/ });
+    await waitFor(() => expect(button.getAttribute('data-cache-watch-header-font')).toBe('active'));
+    expect(getComputedStyle(button).fontFamily).toContain('monospace');
+    report = { ...report, estimatedExpiresAt: Date.now() - 1000 };
+    await slot.behavior.emitRealtime('changed', null);
+    await waitFor(() => expect(button.getAttribute('data-cache-watch-header-font')).toBe('elapsed'));
+    expect(button.textContent).toContain('expired');
+  } finally { await scripts.lifecycle.dispose(); }
+});
+
+it('uses the context template with live TTL values and updates it after saving settings', async () => {
+  const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
+  const threadId = 'thr_contexttemplate123';
+  let template = 'Context {{firstRequest}} · {{#mono}}{{minutes | pad2}}:{{seconds | pad2}}{{/mono}}';
+  const slot = renderSlot({ component: app.threadContextSegments[0]!.action! }, {
+    threadId, projectId: 'proj_test', environment: null, segments: [], isExpanded: false, onToggle() {},
+  }, {
+    rpc: {
+      status: () => ({ ...cacheStatus(threadId), estimatedExpiresAt: Date.now() + 61_000 }),
+      getStatusTemplate: (input: unknown) => {
+        expect(input).toEqual({ surface: 'context' });
+        return { template };
+      },
+    },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  const button = await slot.findByRole('button', { name: /Context hit · 01:01/ });
+  expect(button.textContent).not.toContain('Cache:');
+  expect(slot.getByText(/Context hit/).className).not.toContain('font-mono');
+  expect(slot.getByText('01:01').className).toContain('font-mono');
+  template = 'State: {{state}}';
+  await slot.behavior.emitRealtime('template-changed', null);
+  expect(await slot.findByRole('button', { name: 'State: warm' })).toBeTruthy();
+});
+
+it('edits context and header templates separately and picks a distinct context default', async () => {
+  const { DEFAULT_STATUS_TEMPLATE, DEFAULT_CONTEXT_TEMPLATE } = await import('./status-template');
+  const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
+  const stored = { header: DEFAULT_STATUS_TEMPLATE, context: 'Saved context: {{ttl}}' };
+  const slot = renderSlot(app.settingsSections[0]!, {}, {
+    rpc: {
+      getStatusTemplate: (input: unknown) => ({ template: stored[(input as { surface: 'header' | 'context' } | null)?.surface ?? 'header'] }),
+      setStatusTemplate: (input: unknown) => {
+        const { surface, template } = input as { surface: 'header' | 'context'; template: string };
+        stored[surface] = template; return { template };
+      },
+    },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  const context = within(slot.getByRole('group', { name: 'Thread context' }));
+  const header = within(slot.getByRole('group', { name: 'Thread header' }));
+  const contextInput = context.getByRole('textbox', { name: 'Status template' }) as HTMLTextAreaElement;
+  await waitFor(() => expect(contextInput.value).toBe(stored.context));
+  fireEvent.change(context.getByRole('combobox', { name: 'Status template preset' }), { target: { value: 'Default' } });
+  expect(contextInput.value).toBe(DEFAULT_CONTEXT_TEMPLATE);
+  expect(context.getByLabelText('Status preview').textContent).toContain('734.8K read');
+  fireEvent.click(context.getByRole('button', { name: 'Save template' }));
+  await waitFor(() => expect(stored.context).toBe(DEFAULT_CONTEXT_TEMPLATE));
+  expect(stored.header).toBe(DEFAULT_STATUS_TEMPLATE);
+  expect((header.getByRole('textbox', { name: 'Status template' }) as HTMLTextAreaElement).value).toBe(DEFAULT_STATUS_TEMPLATE);
 });

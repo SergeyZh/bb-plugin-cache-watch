@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { definePluginApp, experimental_useThreadContextKind, useBbContext, useRealtime, useRpc } from '@get-bb/plugin-sdk/app';
 import { CacheMessageMetadata, SessionStatisticsPanel, SessionStatisticsButton } from './statistics-ui';
+import { StatusTemplateSettings } from './template-settings';
+import { registerCacheHeader } from './header-cache';
 import { registerKeepaliveCommands } from './keepalive-commands';
-import { CostDetails, LastCacheUse, TurnUsageDetails, ThreadCacheCard, ThreadCacheDetails, ThreadCacheSummary } from './thread-cache';
+import { CostDetails, LastCacheUse, TurnUsageDetails, ThreadCacheCard, ThreadCacheDetails, ThreadCacheSummary, useCachePlacement } from './thread-cache';
 import type { rpcContract, CacheStatus } from './server';
 import type { Watch } from './core';
 import { Button } from '@/components/ui/button';
@@ -50,7 +52,7 @@ function CacheWatchPage() {
     <section className="space-y-3">
       <label className="block space-y-1">Thread ID<Input value={threadId} onChange={e => { setThreadId(e.target.value.trim()); setStatus(null); }} placeholder="thr_…" /></label>
       <div className="flex gap-4">
-        <label className="flex-1 space-y-1">Keep alive for (hours)<Input type="number" min="0.25" max="24" step="0.25" value={hours} onChange={e => setHours(e.target.value)} /></label>
+        <label className="flex-1 space-y-1">Keep alive for (hours)<Input type="number" min="1" max="24" step="1" value={hours} onChange={e => setHours(e.target.value)} /></label>
       </div>
       <div className="flex flex-wrap gap-2">
         <Button disabled={busy || !threadId} variant="outline" onClick={() => void act(refresh)}>Refresh status</Button>
@@ -89,14 +91,23 @@ function CacheWatchPage() {
 }
 export default definePluginApp(app => {
   registerKeepaliveCommands(app);
+  registerCacheHeader(app);
+  app.slots.settingsSection({ id: 'status-template', title: 'Status templates', component: StatusTemplateSettings });
   app.slots.experimental_messageMetadata({ id: 'turn-cache-statistics', placement: 'actionRow', component: CacheMessageMetadata });
   app.slots.navPanel({ id: 'cache-watch', title: 'Cache Watch', icon: 'Flame', path: 'cache-watch', component: CacheWatchPage });
   app.slots.experimental_threadContextCardSection({
-    id: 'cache-usage', title: 'Prompt cache', group: '0_cache', component: props => <ThreadCacheCard {...props} sessionAction={<SessionStatisticsButton key={props.threadId} threadId={props.threadId} />} />,
+    id: 'cache-usage', title: 'Prompt cache', group: '0_cache', component: props => {
+      const placement = useCachePlacement();
+      return placement === 'context' ? <ThreadCacheCard {...props} hideWhenEarly sessionAction={<SessionStatisticsButton key={props.threadId} threadId={props.threadId} />} /> : null;
+    },
   });
   app.slots.experimental_threadContextSegment({
     id: 'cache-usage', title: 'Prompt cache', group: '4_cache',
     summary: () => null, action: ThreadCacheSummary, details: props => <ThreadCacheDetails {...props} sessionAction={<SessionStatisticsButton key={props.threadId} threadId={props.threadId} />} />,
-    useVisible: () => experimental_useThreadContextKind() === 'banner',
+    useVisible: () => {
+      const kind = experimental_useThreadContextKind();
+      const placement = useCachePlacement();
+      return kind === 'banner' && placement === 'context';
+    },
   });
 });

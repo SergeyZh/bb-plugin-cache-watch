@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   experimental_Icon as Icon,
   experimental_ThreadContextCardRow as ContextRow,
-  useRealtime, useRpc,
+  useRealtime, useRpc, useSettings,
   type ExperimentalThreadContextCardProps,
   type ExperimentalThreadContextSegmentProps,
 } from '@get-bb/plugin-sdk/app';
+import { defaultStatusTemplate, renderStatusParts, templateData, type StatusTextPart } from './status-template';
+import { StatusTemplateText } from './status-template-ui';
+import { useStatusTemplate } from './template-settings';
 import type { TurnUsage } from './turn-usage';
 import type { CacheStatus, rpcContract } from './server';
 import { costRange, usd, PRICING_URL, type CostEstimate } from './cost';
@@ -49,6 +52,7 @@ function useRemainingTime(expiresAt: number | null | undefined) {
     return () => clearInterval(timer);
   }, [expiresAt]);
   return {
+    now,
     text: remainingTime(expiresAt, now),
     color: expiresAt == null || !Number.isFinite(expiresAt) ? 'text-muted-foreground'
       : expiresAt > now ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400',
@@ -57,7 +61,7 @@ function useRemainingTime(expiresAt: number | null | undefined) {
 
 const assumptionNote = 'Assumes 30 minutes after the latest reported cache read or write. The Codex provider did not report its actual cache policy. This is an estimate, not confirmation that the cache is valid or expired.';
 function TimeLeft({ remaining, assumed }: { remaining: ReturnType<typeof useRemainingTime>; assumed: boolean }) {
-  return <span className={remaining.color} title={assumed ? assumptionNote : 'Estimated from provider telemetry; not confirmed live cache state.'}>
+  return <span className={`font-mono tabular-nums whitespace-nowrap ${remaining.color}`} title={assumed ? assumptionNote : 'Estimated from provider telemetry; not confirmed live cache state.'}>
     {remaining.text}{assumed ? ' · assumed 30m' : ''}
   </span>;
 }
@@ -115,8 +119,8 @@ function KeepaliveControls({ threadId, status, refresh }: { threadId: string; st
     {active && <p className="text-muted-foreground">Next ping: {status?.nextPingAt == null ? 'Waiting for fresh expiry telemetry' : timestamp(status.nextPingAt)}</p>}
     <p className="text-muted-foreground">Ordinary paid turns · 5 minutes before estimated expiry{status?.expirySource === 'codex-assumption' ? ' · assumed 30m TTL' : ''}.</p>
     <div className="flex flex-wrap items-center gap-2">
-      <label>Hours <input aria-label="Keepalive duration (hours)" type="number" min="0.25" max="24" step="0.25" value={hours} onChange={e => setHours(e.target.value)} className="w-16 rounded border bg-background px-1 py-0.5" /></label>
-      <button type="button" disabled={busy || !status || !Number.isFinite(Number(hours)) || Number(hours) < 0.25 || Number(hours) > 24} onClick={() => void change(true)} className="rounded border px-2 py-1 disabled:opacity-50">{active ? 'Renew paid keepalive' : 'Enable paid keepalive'}</button>
+      <label>Hours <input aria-label="Keepalive duration (hours)" type="number" min="1" max="24" step="1" value={hours} onChange={e => setHours(e.target.value)} className="w-16 rounded border bg-background px-1 py-0.5" /></label>
+      <button type="button" disabled={busy || !status || !Number.isFinite(Number(hours)) || Number(hours) < 1 || Number(hours) > 24} onClick={() => void change(true)} className="rounded border px-2 py-1 disabled:opacity-50">{active ? 'Renew paid keepalive' : 'Enable paid keepalive'}</button>
       <button type="button" disabled={busy} onClick={() => void change(false)} className="rounded border px-2 py-1 disabled:opacity-50">Stop keepalive</button>
     </div>
     {(error || watch?.error) && <p role="alert" className="text-destructive">{error || watch?.error}</p>}
@@ -161,11 +165,13 @@ export function TurnUsageDetails({ turn }: { turn: TurnUsage | null | undefined 
   </div>;
 }
 
-function CachePanel({ threadId, card = false, sessionAction }: { threadId: string; card?: boolean; sessionAction?: ReactNode }) {
+function CachePanel({ threadId, card = false, hideWhenEarly = false, sessionAction }: { threadId: string; card?: boolean; hideWhenEarly?: boolean; sessionAction?: ReactNode }) {
   const { status, error, fetching, refresh } = useThreadCache(threadId);
   const sample = status?.sample;
   const remaining = useRemainingTime(status?.estimatedExpiresAt);
   const assumed = status?.expirySource === 'codex-assumption';
+  const threshold = useCacheDisplayThreshold();
+  if (hideWhenEarly && !cacheIsVisible(status?.estimatedExpiresAt, remaining.now, threshold)) return null;
   const rows: [string, ReactNode][] = [
     ['Cache used (first request)', <LastCacheUse readTokens={status?.turn?.firstReadTokens} />],
     ['Turn cache read', tokens(status?.turn?.readTokens)],
@@ -194,19 +200,39 @@ function CachePanel({ threadId, card = false, sessionAction }: { threadId: strin
   </div>;
 }
 
-export function ThreadCacheCard({ threadId, sessionAction }: ExperimentalThreadContextCardProps & { sessionAction?: ReactNode }) {
-  return <CachePanel key={threadId} threadId={threadId} sessionAction={sessionAction} card />;
+export function cacheIsVisible(expiresAt: number | null | undefined, now: number, threshold: number) {
+  return threshold <= 0 || expiresAt == null || !Number.isFinite(expiresAt) || expiresAt - now <= threshold * 1000;
+}
+
+export function useCacheDisplayThreshold() {
+  const value = useSettings().values?.cacheShowBelowSeconds;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function useCachePlacement() {
+  return useSettings().values?.cachePlacement === 'header' ? 'header' : 'context';
+}
+
+export function ThreadCacheCard({ threadId, sessionAction, hideWhenEarly }: ExperimentalThreadContextCardProps & { sessionAction?: ReactNode; hideWhenEarly?: boolean }) {
+  return <CachePanel key={threadId} threadId={threadId} sessionAction={sessionAction} hideWhenEarly={hideWhenEarly} card />;
 }
 export function ThreadCacheSummary({ threadId, onToggle, isExpanded }: ExperimentalThreadContextSegmentProps) {
   const { status, error } = useThreadCache(threadId);
   const sample = status?.sample;
   const remaining = useRemainingTime(status?.estimatedExpiresAt);
   const assumed = status?.expirySource === 'codex-assumption';
-  const compact = (value: number | null | undefined) => value == null ? '?' : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  const threshold = useCacheDisplayThreshold();
+  const { template } = useStatusTemplate('context');
+  if (!isExpanded && !cacheIsVisible(status?.estimatedExpiresAt, remaining.now, threshold)) return null;
   const turn = status?.turn;
-  const label = turn?.steps.length ? `Cache: ${compact(turn.readTokens)} read · ${compact(turn.writeTokens)} written` : error ? 'Cache unavailable' : status ? 'Cache: waiting for turn usage' : 'Loading cache…';
+  const data = templateData(status, remaining.now, error);
+  let parts: StatusTextPart[];
+  try { parts = renderStatusParts(template, data); }
+  catch { parts = renderStatusParts(defaultStatusTemplate('context'), data); }
+  const label = parts.map(part => part.text).join('');
+  if (!label && !isExpanded) return null;
   return <button type="button" onClick={onToggle} aria-expanded={isExpanded} title={`${label} (whole turn)\nReported: ${timestamp(sample?.at)}\nTurn cache read: ${tokens(turn?.readTokens)} tokens\nTurn cache written: ${tokens(turn?.writeTokens)} tokens\n${remaining.text}\nEstimated expiry: ${timestamp(status?.estimatedExpiresAt)}${assumed ? `\n${assumptionNote}` : ''}${error && sample ? '\nReport may be outdated' : ''}\n${explanation}`} className={`ml-auto flex min-h-6 min-w-0 flex-1 cursor-pointer items-center gap-1.5 overflow-hidden rounded px-2 py-1 text-left text-xs transition-colors hover:bg-state-hover hover:text-foreground focus-visible:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isExpanded ? 'text-foreground' : 'text-muted-foreground'}`}>
-    <Icon name="Database" className="size-3.5 shrink-0" /><span className="truncate">{label}{sample ? <> · <TimeLeft remaining={remaining} assumed={assumed} /></> : null}{error && sample ? ' · stale' : ''}</span>
+    <Icon name="Database" className="size-3.5 shrink-0" /><span className="truncate">{label ? <StatusTemplateText parts={parts} monoClassName={remaining.color} /> : 'Cache details'}</span>
     <Icon name={isExpanded ? 'ChevronUp' : 'ChevronDown'} aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
   </button>;
 }
