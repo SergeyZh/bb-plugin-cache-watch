@@ -1,7 +1,10 @@
 See whole-turn prompt-cache reads, writes, and estimated time left
 directly above each thread's composer. Expand the right-aligned Cache summary
 for rounded per-request sums, first-request cache use, and cost estimates. The context-card layout includes
-the same data in a Prompt cache section.
+the same data in a Prompt cache section. You can place the compact status in
+the thread header instead, and hide it until the estimated TTL reaches a chosen
+threshold. Header and context templates have separate editors, presets, previews,
+and variables for time, cache state, first-request hits, tokens, and costs.
 
 ## Cache estimates
 

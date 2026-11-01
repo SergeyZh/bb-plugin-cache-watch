@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.1 — 2026-11-01
+
+- Choose between the thread context and header for cache information, with
+  optional hiding until the estimated TTL reaches a configurable threshold.
+- Customize separate header and context templates with time components, cache
+  state, first-request hit/miss, token counts, and estimated costs. Include
+  conditions, numeric formatting, presets, previews, and a compact variable reference.
+- Stabilize countdown digits with monospace text. Context templates support
+  selective `{{#mono}}…{{/mono}}` blocks; header colors follow the TTL estimate.
+- Show response-marker costs as the midpoint of the estimated range rounded to
+  two decimal places, preserving full precision and ranges in expanded details.
+- Change keepalive duration controls to one-hour steps.
+- Cover the new display, template, persistence, and formatting behavior with
+  98 backend/frontend tests.
+
 ## 0.3.0 — 2026-11-01
 
 - Sum cache read/write counters over the entire turn, skip duplicate usage
