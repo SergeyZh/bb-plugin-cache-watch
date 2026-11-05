@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 — 2026-11-05
 
 - Link the Claude Code Telemetry provider in the plugin description, and
   recommend it in expanded Cache details for built-in Claude Code sessions.
