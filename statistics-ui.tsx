@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRealtime, useRpc, type ExperimentalMessageMetadataProps } from '@get-bb/plugin-sdk/app';
 import type { rpcContract } from './server';
 import type { SavedTurn, SessionStatistics } from './statistics';
-import { CostDetails, LastCacheUse, TurnUsageDetails, cacheResult } from './thread-cache';
+import { CostDetails, LastCacheUse, TurnUsageDetails, cacheResult, writeLifetimesText } from './thread-cache';
 import { compactCost, costRange, usd } from './cost';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './components/ui/dialog';
 
@@ -108,6 +108,10 @@ export function SessionStatisticsPanel({ threadId }: { threadId: string }) {
       <dl className="grid grid-cols-2 gap-2">
         <dt>{(data.providerId === 'claude-code' || data.providerId === 'claude-code-telemetry') ? 'Input tokens (uncached)' : 'Input tokens'}</dt><dd>{total(data.input)}</dd><dt>Output tokens</dt><dd>{total(data.output)}</dd>
         <dt>Cache read</dt><dd>{total(data.read)}</dd><dt>Cache written (reported)</dt><dd>{total(data.written)}</dd>
+        {data.writeLifetimeTurns > 0 && <><dt>Cache written, 5m lifetime</dt><dd>{total(data.written5m)}</dd>
+          <dt>Cache written, 1h lifetime</dt><dd>{total(data.written1h)}</dd>
+          {data.writtenUnknownLifetime.known > 0 && <><dt>Cache written, lifetime unreported</dt><dd>{total(data.writtenUnknownLifetime)}</dd></>}
+          {data.writeLifetimeTurns < data.totalTurns && <><dt>Lifetime split covers</dt><dd>{data.writeLifetimeTurns} of {data.totalTurns} turns; other turns report no lifetimes</dd></>}</>}
         {data.keepaliveTurns > 0 && <><dt>Keepalive cost (included)</dt><dd>{total(data.keepaliveCostMin, true)}{data.keepaliveCostMax.known !== data.keepaliveCostMin.known ? ` – ${usd(data.keepaliveCostMax.known)}` : ''}</dd></>}
         <dt>Cost (API estimate)</dt><dd>{total(data.costMin, true)}{data.costMax.known !== data.costMin.known ? ` – ${usd(data.costMax.known)}` : ''}</dd>
       </dl>
@@ -115,7 +119,7 @@ export function SessionStatisticsPanel({ threadId }: { threadId: string }) {
       <p className="text-xs text-muted-foreground">Includes usage reported so far and keepalive. Missing values are excluded from known subtotals and counted separately. Cost uses each turn's saved API rate estimate.</p>
       <div className="max-h-96 space-y-2 overflow-y-auto">
         {data.turns.map(saved => <details key={saved.turnId} className="rounded border p-2">
-          <summary className="cursor-pointer text-xs">{new Date(saved.startedAt).toLocaleString()} · first: {cacheResult(saved.turn.firstReadTokens)} · {compact(saved.turn.readTokens)} read · {compact(saved.turn.writeTokens)} written{saved.keepalive ? ' · keepalive' : ''} · {costRange(saved.cost)}</summary>
+          <summary className="cursor-pointer text-xs">{new Date(saved.startedAt).toLocaleString()} · first: {cacheResult(saved.turn.firstReadTokens)} · {compact(saved.turn.readTokens)} read · {compact(saved.turn.writeTokens)} written{saved.turn.writeLifetimes ? ` (${writeLifetimesText(saved.turn.writeLifetimes, compact)})` : ''}{saved.keepalive ? ' · keepalive' : ''} · {costRange(saved.cost)}</summary>
           <div className="pt-3"><SavedTurnDetails saved={saved} /></div>
         </details>)}
       </div>

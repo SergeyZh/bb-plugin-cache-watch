@@ -127,3 +127,49 @@ it('prices telemetry requests by their actual model and leaves unattributed resi
   rows.push(meta(7, null, 'aggregate-remainder') as unknown as Rows[number], report(8, 3) as unknown as Rows[number]);
   expect(estimateTurnCost('claude-code-telemetry', rows)).toMatchObject({ minUsd: null, maxUsd: null });
 });
+
+it('prices Claude cache writes by reported lifetime and bounds only writes without one', async () => {
+  const { priceClaudeTokens } = await import('./cost');
+  const exact = priceClaudeTokens('claude-opus-5-5', 100, 50000, 1000, 10000, { fiveMinuteTokens: 4000, oneHourTokens: 6000, unknownTokens: 0 })!;
+  expect(exact.minUsd).toBeCloseTo(0.0984);
+  expect(exact.maxUsd).toBeCloseTo(0.0984);
+  const partial = priceClaudeTokens('claude-opus-5-5', 100, 50000, 1000, 10000, { fiveMinuteTokens: 2000, oneHourTokens: 6000, unknownTokens: 2000 })!;
+  expect(partial.minUsd).toBeCloseTo(0.0984);
+  expect(partial.maxUsd).toBeCloseTo(0.1044);
+  // A breakdown that does not sum to the write count falls back to the full range.
+  expect(priceClaudeTokens('claude-opus-5-5', 100, 50000, 1000, 10000, { fiveMinuteTokens: 1, oneHourTokens: 0, unknownTokens: 0 }))
+    .toEqual(priceClaudeTokens('claude-opus-5-5', 100, 50000, 1000, 10000));
+});
+
+it('uses telemetry write lifetimes for an exact Claude Code Telemetry turn estimate', () => {
+  const counts = { inputTokens: 100, outputTokens: 1000, cachedInputTokens: 60000, cacheReadInputTokens: 50000, cacheWriteInputTokens: 10000, totalTokens: 61100, reasoningOutputTokens: 0 };
+  const rows = [{ seq: 1, type: 'client/turn/requested', data: { requestId: 'r1', execution: { model: 'claude-opus-5-5' } } },
+    { seq: 2, type: 'turn/started', scope: { kind: 'turn', turnId: 't1' } },
+    { seq: 3, type: 'thread/extensionState/updated', scope: { kind: 'thread' }, data: { kind: 'claude-code-telemetry/usage', payload: {
+      source: 'request', messageId: 'msg3', model: 'claude-opus-5-5', incomplete: false, counts,
+      cacheWriteBreakdown: { fiveMinuteTokens: 0, oneHourTokens: 10000, unknownTokens: 0 } } } },
+    { seq: 4, type: 'thread/tokenUsage/updated', createdAt: 1000, scope: { kind: 'turn', turnId: 't1' },
+      data: { providerThreadId: 'session1', tokenUsage: { last: counts, total: counts } } }] as unknown as Rows;
+  const cost = estimateTurnCost('claude-code-telemetry', rows);
+  expect(cost.minUsd).toBeCloseTo(0.1104);
+  expect(cost.maxUsd).toBeCloseTo(0.1104);
+  expect(cost.note).toContain('reported lifetimes');
+});
+
+it('estimates usage without a model at the turn\'s only model and marks it', () => {
+  const counts = { inputTokens: 100, outputTokens: 10, cachedInputTokens: 0, cacheReadInputTokens: 0, cacheWriteInputTokens: 0, totalTokens: 110, reasoningOutputTokens: 0 };
+  const remainder = { ...counts, inputTokens: 0, outputTokens: 155, totalTokens: 155 };
+  const meta = (seq: number, model: string | null, last: typeof counts) => ({ seq, type: 'thread/extensionState/updated', scope: { kind: 'thread' },
+    data: { kind: 'claude-code-telemetry/usage', payload: { source: model ? 'request' : 'aggregate-remainder', messageId: model ? `msg${seq}` : null, model, counts: last, incomplete: !model } } });
+  const report = (seq: number, last: typeof counts, total: typeof counts) => ({ seq, type: 'thread/tokenUsage/updated', createdAt: 1000,
+    scope: { kind: 'turn', turnId: 't1' }, data: { providerThreadId: 'session1', tokenUsage: { last, total } } });
+  const rows = [{ seq: 1, type: 'client/turn/requested', data: { requestId: 'r1', execution: { model: 'claude-sonnet-5-5' } } },
+    { seq: 2, type: 'turn/started', scope: { kind: 'turn', turnId: 't1' } },
+    meta(3, 'claude-sonnet-5-5', counts), report(4, counts, counts),
+    meta(5, null, remainder), report(6, remainder, { ...counts, outputTokens: 165 })] as unknown as Rows;
+  const cost = estimateTurnCost('claude-code-telemetry', rows);
+  // Sonnet 5.5: 100 × $2 + (10 + 155) × $10 per MTok.
+  expect(cost).toMatchObject({ remainderModel: 'claude-sonnet-5-5', model: 'claude-sonnet-5-5' });
+  expect(cost.minUsd).toBeCloseTo(0.00185);
+  expect(cost.note).toContain('priced at claude-sonnet-5-5 rates');
+});

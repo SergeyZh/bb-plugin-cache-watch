@@ -17,11 +17,19 @@ export const sessionStatisticsSchema = z.object({
   providerId: z.string().default('codex'),
   turns: z.array(savedTurnSchema), totalTurns: z.number(), keepaliveTurns: z.number(),
   input: totalSchema, output: totalSchema, read: totalSchema, written: totalSchema,
+  // Over turns that report cache-write lifetimes (Claude Code Telemetry).
+  writeLifetimeTurns: z.number().int().nonnegative().default(0),
+  written5m: totalSchema.default({ known: 0, unknownTurns: 0 }), written1h: totalSchema.default({ known: 0, unknownTurns: 0 }),
+  writtenUnknownLifetime: totalSchema.default({ known: 0, unknownTurns: 0 }),
   costMin: totalSchema, costMax: totalSchema, keepaliveCostMin: totalSchema, keepaliveCostMax: totalSchema,
   unattributedReports: z.number().int().nonnegative(),
   nextBeforeSeq: z.number().nullable(), syncedThroughSeq: z.number(),
 });
 export type SessionStatistics = z.infer<typeof sessionStatisticsSchema>;
+
+// Bump when saved snapshots must be recomputed. 3: re-read retained events for
+// cache-write lifetimes. 4: estimate usage without a model at the turn's model.
+const REVISION = 4;
 
 export function createStatistics(bb: BbPluginApi) {
   const db = bb.storage.database();
@@ -78,7 +86,7 @@ export function createStatistics(bb: BbPluginApi) {
     if (disposed || (thread && thread.deletedAt !== null)) return;
     const provider = providerId ?? thread!.providerId;
     const revision = db.prepare('SELECT revision FROM cache_statistics_versions WHERE thread_id = ?').get(threadId) as { revision: number } | undefined;
-    const needsRebuild = revision?.revision !== 2;
+    const needsRebuild = revision?.revision !== REVISION;
     const initial = getCursor(threadId);
     let cursor = needsRebuild ? 0 : initial;
     while (!disposed) {
@@ -93,7 +101,7 @@ export function createStatistics(bb: BbPluginApi) {
           const metadata = row.type === 'thread/extensionState/updated' ? requestMetadataSchema.safeParse(row.data.payload) : null;
           const safe = row.type === 'thread/extensionState/updated' ? { ...row, data: { kind: row.data.kind, payload: metadata?.success ? metadata.data : null } } : row.type === 'client/turn/requested' ? { ...row, data: { ...row.data, input: row.data.input.some(part => part.type === 'text' && part.text === PING)
             ? [{ type: 'text', text: PING, mentions: [] }] : [] } } : row;
-          db.prepare('INSERT OR IGNORE INTO cache_events VALUES (?, ?, ?)').run(threadId, row.seq, JSON.stringify(safe));
+          db.prepare('INSERT OR REPLACE INTO cache_events VALUES (?, ?, ?)').run(threadId, row.seq, JSON.stringify(safe));
         }
         cursor = fresh[fresh.length - 1].seq;
         // Snapshot update and cursor commit are atomic, including across reloads.
@@ -106,7 +114,7 @@ export function createStatistics(bb: BbPluginApi) {
     if (needsRebuild) db.transaction(() => {
       db.prepare("DELETE FROM cache_events WHERE thread_id = ? AND json_extract(body, '$.type') = 'thread/extensionState/updated' AND json_extract(body, '$.data.kind') != 'claude-code-telemetry/usage'").run(threadId);
       rebuild(threadId, provider, 0);
-      db.prepare('INSERT INTO cache_statistics_versions VALUES (?, 2) ON CONFLICT(thread_id) DO UPDATE SET revision=2').run(threadId);
+      db.prepare('INSERT INTO cache_statistics_versions VALUES (?, ?) ON CONFLICT(thread_id) DO UPDATE SET revision=excluded.revision').run(threadId, REVISION);
     })();
     if (cursor > initial || needsRebuild) bb.realtime.publish('statistics-changed', { threadId });
   }
@@ -137,9 +145,14 @@ export function createStatistics(bb: BbPluginApi) {
     const turnIds = new Set(all.map(turn => turn.turnId));
     const unattributedReports = load(threadId).filter(row => row.type === 'thread/tokenUsage/updated' && (row.scope.kind !== 'turn' || !turnIds.has(row.scope.turnId))).length;
     const keepalives = all.filter(turn => turn.keepalive);
+    const lifetimeTurns = all.filter(turn => turn.turn.writeLifetimes);
     return { providerId: all[0]?.providerId ?? 'unknown', unattributedReports, turns, totalTurns: all.length, keepaliveTurns: all.filter(turn => turn.keepalive).length,
       input: total(s => s.turn.inputTokens), output: total(s => s.turn.outputTokens),
       read: total(s => s.turn.readTokens), written: total(s => s.turn.writeTokens),
+      writeLifetimeTurns: lifetimeTurns.length,
+      written5m: total(s => s.turn.writeLifetimes!.fiveMinuteTokens, lifetimeTurns),
+      written1h: total(s => s.turn.writeLifetimes!.oneHourTokens, lifetimeTurns),
+      writtenUnknownLifetime: total(s => s.turn.writeLifetimes!.unknownTokens, lifetimeTurns),
       costMin: total(s => s.cost.minUsd), costMax: total(s => s.cost.maxUsd),
       keepaliveCostMin: total(s => s.cost.minUsd, keepalives), keepaliveCostMax: total(s => s.cost.maxUsd, keepalives),
       nextBeforeSeq: available.length > turns.length ? turns[turns.length - 1].startSeq : null,

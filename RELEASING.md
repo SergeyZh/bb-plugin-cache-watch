@@ -1,13 +1,13 @@
 # Publishing to GitHub
 
 Releases are published to `SergeyZh/bb-plugin-cache-watch` as Git tags and
-GitHub prereleases while the plugin is experimental. Version 0.3.0 adds
+GitHub releases. Version 0.3.0 adds
 turn/session statistics, provider cost estimates, and Claude Code Telemetry support.
 
 For subsequent releases, complete the checks below, commit the version, lockfile,
 CHANGELOG and source changes, then push `main`. Wait for GitHub Actions to pass
 before creating and pushing the matching immutable `vX.Y.Z` tag. Create a GitHub
-prerelease from that tag using its CHANGELOG entry as the release notes.
+release from that tag using its CHANGELOG entry as the release notes.
 
 ## First publication
 
@@ -29,8 +29,8 @@ prerelease from that tag using its CHANGELOG entry as the release notes.
    git push origin v0.1.0
    ```
 
-5. Create a GitHub release from `v0.1.0`, mark it as a prerelease while the
-   plugin is experimental, and use the matching CHANGELOG entry as its notes.
+5. Create a GitHub release from `v0.1.0` and use the matching CHANGELOG entry
+   as its notes.
    Git installs build from source; no committed `dist/` or release binary is
    required. Users can now install the tagged source shown in the README.
 

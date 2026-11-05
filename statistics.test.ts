@@ -169,3 +169,44 @@ it('backfills THREAD-scoped request metadata across page boundaries and a pre-te
   const reloaded = await h.harness.lifecycle.reload(plugin); hosts.push(reloaded);
   expect(await reloaded.harness.behavior.callRpc('turn', { threadId, turnId: 't1' })).toEqual(before);
 });
+
+it('saves cache-write lifetimes and totals them for the session, re-reading events saved before lifetimes', async () => {
+  const a = { ...counts(100, 50005, 20, 5), cacheReadInputTokens: 50000 };
+  const meta = (seq: number) => ({ seq, type: 'thread/extensionState/updated', scope: { kind: 'thread' },
+    data: { kind: 'claude-code-telemetry/usage', payload: { source: 'request', messageId: `msg-${seq}`, model: 'claude-opus-5-5', incomplete: false, counts: a,
+      cacheWriteBreakdown: { fiveMinuteTokens: 1, oneHourTokens: 4, unknownTokens: 0 } } } });
+  const data = rows([request(1, 'claude-opus-5-5'), start(2, 't1'), meta(3), usage(4, 't1', a), done(5, 't1'),
+    request(6, 'claude-opus-5-5'), start(7, 't2'), meta(8), usage(9, 't2', { ...a, inputTokens: 200 }, a), done(10, 't2')]);
+  const h = await setup(data, 'claude-code-telemetry');
+  const expected = { writeLifetimeTurns: 2, written5m: { known: 2, unknownTurns: 0 }, written1h: { known: 8, unknownTurns: 0 },
+    writtenUnknownLifetime: { known: 0, unknownTurns: 0 } };
+  expect(await h.harness.behavior.callRpc('session', { threadId })).toMatchObject(expected);
+  expect(await h.harness.behavior.callRpc('turn', { threadId, turnId: 't1' })).toMatchObject({
+    turn: { writeLifetimes: { fiveMinuteTokens: 1, oneHourTokens: 4, unknownTokens: 0 } } });
+  // Revision 2 stored telemetry without the breakdown; upgrading re-reads retained events.
+  const db = h.bb.storage.database();
+  db.prepare("UPDATE cache_events SET body = json_remove(body, '$.data.payload.cacheWriteBreakdown')").run();
+  db.prepare('UPDATE cache_statistics_versions SET revision=2').run();
+  const reloaded = await h.harness.lifecycle.reload(plugin); hosts.push(reloaded);
+  expect(await reloaded.harness.behavior.callRpc('session', { threadId })).toMatchObject(expected);
+});
+
+it('keeps per-request usage in status after BB drops all but the last usage report of a finished turn', async () => {
+  const a = { ...counts(2, 31730, 3, 31730), cacheReadInputTokens: 0 };
+  const b = { ...counts(2, 37602, 20, 5872), cacheReadInputTokens: 31730 };
+  const remainder = { ...counts(0, 0, 155, 0), cacheReadInputTokens: 0 };
+  const meta = (seq: number, last: typeof a, source = 'request') => ({ seq, type: 'thread/extensionState/updated', scope: { kind: 'thread' },
+    data: { kind: 'claude-code-telemetry/usage', payload: { source, messageId: source === 'request' ? `msg-${seq}` : null,
+      model: source === 'request' ? 'claude-sonnet-5-5' : null, incomplete: source !== 'request', counts: last } } });
+  const data = rows([request(1, 'claude-sonnet-5-5'), start(2, 't1'), meta(3, a), usage(4, 't1', a),
+    meta(5, b), usage(6, 't1', { ...b, ...counts(4, 69332, 23, 37602) }, b)]);
+  const h = await setup(data, 'claude-code-telemetry');
+  h.harness.sdk.stub('threads.context', async () => ({ usage: null }) as never);
+  await h.harness.behavior.callRpc('status', { threadId: 'thr_statistics123' });
+  // The turn finishes; BB retains only the final aggregate remainder report.
+  data.splice(0, data.length, ...rows([request(1, 'claude-sonnet-5-5'), start(2, 't1'), meta(3, a), meta(5, b), meta(7, remainder, 'aggregate-remainder'),
+    usage(8, 't1', { ...b, ...counts(4, 69332, 178, 37602) }, remainder), done(9, 't1')]));
+  const status = await h.harness.behavior.callRpc('status', { threadId: 'thr_statistics123' }) as { turn: { readTokens: number; writeTokens: number; outputTokens: number; firstReadTokens: number; steps: unknown[] } };
+  expect(status.turn).toMatchObject({ readTokens: 31730, writeTokens: 37602, outputTokens: 178, firstReadTokens: 0 });
+  expect(status.turn.steps).toHaveLength(3);
+});

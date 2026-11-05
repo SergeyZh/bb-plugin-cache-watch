@@ -8,7 +8,7 @@
     "node": "^24.0.0 || ^26.0.0"
   },
   "bb": {
-    "name": "Cache Watch [Experimental]",
+    "name": "Cache Watch",
     "description": "Inspect prompt-cache usage and opt in to time-limited keepalive turns for idle threads.",
     "branding": {
       "icon": "Flame"

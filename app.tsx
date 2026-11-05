@@ -4,7 +4,7 @@ import { CacheMessageMetadata, SessionStatisticsPanel, SessionStatisticsButton }
 import { StatusTemplateSettings } from './template-settings';
 import { registerCacheHeader } from './header-cache';
 import { registerKeepaliveCommands } from './keepalive-commands';
-import { CostDetails, LastCacheUse, TurnUsageDetails, ThreadCacheCard, ThreadCacheDetails, ThreadCacheSummary, useCachePlacement } from './thread-cache';
+import { CostDetails, LastCacheUse, TelemetryProviderHint, TurnUsageDetails, ThreadCacheCard, ThreadCacheDetails, ThreadCacheSummary, useCachePlacement } from './thread-cache';
 import type { rpcContract, CacheStatus } from './server';
 import type { Watch } from './core';
 import { Button } from '@/components/ui/button';
@@ -76,6 +76,7 @@ function CacheWatchPage() {
       </dl>
       <p className="text-muted-foreground">Read/write counts are summed over the latest turn. Cache use refers to its first request; the breakdown shows cache use per request. Provider reports may combine requests. They do not measure the size of a live cache. The expiry estimate is based on provider telemetry; the cache's current state cannot be checked here. Due pings run on a one-minute sweep and wait while the thread is busy.</p>
       <TurnUsageDetails turn={status.turn} />
+      <TelemetryProviderHint providerId={status.providerId} />
       <CostDetails cost={status.cost} />
       {status.watch?.error && <p role="alert" className="text-destructive">{status.watch.error}</p>}
     </section>}

@@ -14,6 +14,9 @@ export const VARIABLES = {
   firstReadTokens: 'Cache tokens read on the first request, or null.',
   readTokens: 'Cache tokens read over the latest turn, or null.',
   writeTokens: 'Cache tokens written over the latest turn, or null.',
+  write5mTokens: 'Turn cache tokens written with a 5-minute lifetime, or null when lifetimes are unreported.',
+  write1hTokens: 'Turn cache tokens written with a 1-hour lifetime, or null when lifetimes are unreported.',
+  cacheLifetime: 'Provider-reported cache lifetime of the latest report (5m, 1h, or e.g. 30m), or null.',
   inputTokens: 'Provider-reported turn input tokens, or null. Claude excludes cache reads/writes.',
   outputTokens: 'Turn output tokens, or null.',
   requests: 'Number of usage reports in the turn; a report may combine requests.',
@@ -58,6 +61,13 @@ export const STATUS_PRESETS = [
   { name: 'Minimal', template: '{{#if state == "warm"}}{{minutes | pad2}}m {{seconds | pad2}}s{{else}}{{state}}{{/if}}' },
 ] as const;
 
+function lifetime(ms: number | null | undefined): string | null {
+  if (!ms || !Number.isFinite(ms) || ms <= 0) return null;
+  if (ms % 60_000 !== 0) return `${Math.round(ms / 1000)}s`;
+  const minutes = ms / 60_000;
+  return minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
+}
+
 export function templateData(status: CacheStatus | null | undefined, now: number, error = false): TemplateData {
   const expiry = status?.estimatedExpiresAt;
   const known = expiry != null && Number.isFinite(expiry);
@@ -76,7 +86,10 @@ export function templateData(status: CacheStatus | null | undefined, now: number
       : `~${hours ? `${hours}h ` : ''}${minutes}m ${String(seconds).padStart(2, '0')}s left`,
     firstRequest, firstHit: firstRequest === 'unknown' ? null : firstRequest === 'hit',
     firstReadTokens: first ?? null, readTokens: status?.turn?.readTokens ?? null,
-    writeTokens: status?.turn?.writeTokens ?? null, inputTokens: status?.turn?.inputTokens ?? null,
+    writeTokens: status?.turn?.writeTokens ?? null,
+    write5mTokens: status?.turn?.writeLifetimes?.fiveMinuteTokens ?? null,
+    write1hTokens: status?.turn?.writeLifetimes?.oneHourTokens ?? null,
+    cacheLifetime: lifetime(status?.sample?.ttlMs), inputTokens: status?.turn?.inputTokens ?? null,
     outputTokens: status?.turn?.outputTokens ?? null, requests: status?.turn?.steps.length ?? 0,
     cost: cost?.minUsd == null || cost.maxUsd == null ? null : (cost.minUsd + cost.maxUsd) / 2,
     costMin: cost?.minUsd ?? null, costMax: cost?.maxUsd ?? null, savings: cost?.readSavingsUsd ?? null,

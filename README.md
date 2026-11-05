@@ -3,7 +3,7 @@
 Inspect prompt-cache usage in [BB](https://getbb.app) and optionally keep selected
 idle threads active with time-limited, paid keepalive turns.
 
-Experimental version **0.3.1**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
+Version **0.3.1**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
 Verified with BB 0.48.1 / SDK 0.6.104 on macOS.
 
 ## Thread panel
@@ -81,8 +81,10 @@ keepalive.
 
 ## Claude Code Telemetry
 
-The separate `claude-code-telemetry` provider is supported alongside built-in
-`claude-code`. Cache Watch pairs its THREAD-scoped usage metadata with the next
+The separate [Claude Code Telemetry provider](https://github.com/SergeyZh/bb-plugin-claude-code-telemetry)
+(`claude-code-telemetry`) is supported alongside built-in `claude-code`. For
+built-in Claude Code sessions, the expanded Cache details recommend installing it
+to see per-request cache hits, 5m/1h cache-write lifetimes, and exact costs. Cache Watch pairs its THREAD-scoped usage metadata with the next
 TURN-scoped usage report by sequence inside the turn, consuming each snapshot
 once. It reads historical events, not only the latest extension-state snapshot.
 
@@ -102,11 +104,37 @@ request models, message IDs and cache hits. No request table is added.
 
 Costs use Anthropic rates for each observed request's reported model, including
 mixed main-agent models. `aggregate-remainder` can include subagents or unseen
-requests and has no reliable model: it contributes tokens, but makes full-turn
-cost unavailable rather than pricing it as a fabricated request. Interrupted
+requests and has no reliable model. When every request of the turn used one
+model, the remainder is **estimated at that model's rates** (`cost.remainderModel`,
+shown as "Usage without a model (estimate)" and in the note). With several
+models the remainder cannot be attributed and full-turn cost stays unavailable. Interrupted
 requests with a reported model have observed-cost estimates only, clearly marked.
 The original Claude Code provider still exposes only aggregate turn usage and
 cannot establish first-request reuse.
+
+### Cache-write lifetimes (5 minutes / 1 hour)
+
+Claude Code Telemetry reports, per request, how many written cache tokens have a
+**5-minute** and a **1-hour** lifetime (`cacheWriteBreakdown`); tokens without a
+reported lifetime are counted as *unknown*. This applies whatever TTL was chosen
+for the session (Automatic / 5 minutes / 1 hour): Cache Watch shows what was
+actually written, not the selected setting, which BB does not expose to plugins.
+
+- The expanded panel shows **Written by lifetime** (`5m · 1h · unknown`), and the
+  per-request details add a matching rounded line. The unknown part is shown only
+  when nonzero. Requests whose breakdown does not add up to their write count are
+  treated as unknown.
+- Costs price 5-minute writes at 1.25× and 1-hour writes at 2× base input. Only
+  writes with an unknown lifetime keep the 1.25×–2× range, so fully reported
+  turns have an exact estimate.
+- Session statistics total 5-minute, 1-hour, and unreported-lifetime writes over
+  turns that report lifetimes; each turn summary shows its split.
+- Expiry still follows the provider's `promptCacheTtlMs`: one hour after the
+  latest report when the most recent cache write used a 1-hour lifetime, five
+  minutes when it used a 5-minute one.
+- Saved statistics upgrade once by re-reading retained events (revision 4), so
+  lifetimes are recovered wherever BB still has the history. Events from before
+  the provider reported lifetimes stay unknown.
 
 ## Cost estimates
 
@@ -136,7 +164,8 @@ Anthropic rates were checked on **2026-11-01** against
 Bundled cards cover Opus 5.5/5/4.8/4.7/4.6/4.5/4.1/4, Sonnet 5.5/5/4.6/4.5/4,
 and Haiku 4.5, including dated IDs of those models. Unknown aliases/models have
 no estimate. Write cost is a **5-minute–1-hour range** (1.25×–2× base input),
-since BB's aggregate TTL cannot separate mixed write lifetimes. Missing Claude
+since BB's aggregate TTL cannot separate mixed write lifetimes; Claude Code
+Telemetry lifetimes replace that range with exact rates. Missing Claude
 write/read counts yield an unavailable cost rather than an assumed zero. BB does
 not expose Claude SDK's reported cost here; this is a local API-rate estimate.
 
@@ -332,10 +361,12 @@ zero. Missing values print `?`. `hours`, `minutes`, and `seconds` are components
 the first request of the latest turn. `firstHit` is true, false, or null.
 
 Further variables: `ttlKnown`, `ttl`, `firstReadTokens`, `readTokens`,
-`writeTokens`, `inputTokens`, `outputTokens`, `requests`, `cost`, `costMin`,
+`writeTokens`, `write5mTokens`, `write1hTokens`, `cacheLifetime`, `inputTokens`, `outputTokens`, `requests`, `cost`, `costMin`,
 `costMax`, `savings`, `hitRate`, `provider`, `model`, `assumed`, `keepalive`,
 `stale`, `hasUsage`, `hasReport`, `loading`, and `unavailable`. Tokens and estimated USD costs cover the
-latest turn; `cost` is the range midpoint. `hitRate` is a ratio from 0 to 1.
+latest turn; `cost` is the range midpoint. `write5mTokens`/`write1hTokens` are
+null unless Claude Code Telemetry reports write lifetimes. `cacheLifetime` is the
+provider-reported lifetime of the latest report, such as `5m` or `1h`. `hitRate` is a ratio from 0 to 1.
 Colors and the visibility threshold still follow TTL independently of the text.
 Empty rendered output hides the button. Templates are plain text, up to 4096
 characters, with at most 16 nested conditions; output is limited to 512 characters.

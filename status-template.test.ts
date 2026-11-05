@@ -67,3 +67,16 @@ it('renders explicit monospace blocks without changing text or styling following
   expect(renderStatusParts('{{#if firstHit}}{{#mono}}hidden{{/mono}}{{/if}} normal', data)).toEqual([{ text: 'normal', mono: false }]);
   for (const invalid of ['{{#mono}}oops', '{{/mono}}', '{{#if firstHit}}{{#mono}}bad{{/if}}{{/mono}}']) expect(validateStatusTemplate(invalid)).not.toBeNull();
 });
+it('exposes cache-write lifetimes and the reported cache lifetime', () => {
+  const data = templateData(status({ providerId: 'claude-code-telemetry',
+    sample: { at: 0, readTokens: 1, writeTokens: 10, inputTokens: 1, ttlMs: 3_600_000 },
+    turn: { turnId: 'turn1', firstReadTokens: 0, readTokens: 1, writeTokens: 10, inputTokens: 1, outputTokens: 1, note: null, steps: [],
+      writeLifetimes: { fiveMinuteTokens: 3, oneHourTokens: 7, unknownTokens: 0 } } }), 0);
+  expect(renderStatusTemplate('{{cacheLifetime}} · 5m {{write5mTokens}} · 1h {{write1hTokens}}', data)).toBe('1h · 5m 3 · 1h 7');
+  expect(templateData(status({ sample: { at: 0, readTokens: 1, writeTokens: 1, inputTokens: 1, ttlMs: 300_000 } }), 0))
+    .toMatchObject({ cacheLifetime: '5m', write5mTokens: null, write1hTokens: null });
+});
+it('formats non-minute cache lifetimes in seconds instead of rounding to 0h or 2m', () => {
+  for (const [ms, text] of [[20_000, '20s'], [90_000, '90s'], [1_800_000, '30m'], [7_200_000, '2h']] as const)
+    expect(templateData(status({ sample: { at: 0, readTokens: 1, writeTokens: 1, inputTokens: 1, ttlMs: ms } }), 0).cacheLifetime).toBe(text);
+});

@@ -21,10 +21,11 @@ Cache marker beside an assistant reply. Local statistics retain token usage,
 cache reads/writes, estimated costs, and separate keepalive totals; missing
 telemetry remains visible. The statistics database does not store prompts or replies.
 
-Codex, Central Codex, Claude Code, and the separately installed Claude Code
-Telemetry provider use provider-specific Standard API reference prices. These
+Codex, Central Codex, Claude Code, and the separately installed
+[Claude Code Telemetry provider](https://github.com/SergeyZh/bb-plugin-claude-code-telemetry) use provider-specific Standard API reference prices. These
 are estimates, not subscription charges. Claude Code Telemetry exposes individual
-requests; native Claude Code reports turn aggregates. Retained BB events can be
+requests and 5-minute/1-hour cache-write lifetimes, priced at exact rates;
+native Claude Code reports turn aggregates. Retained BB events can be
 backfilled, but usage missing from the provider/history cannot be recovered.
 
 ## Optional keepalive

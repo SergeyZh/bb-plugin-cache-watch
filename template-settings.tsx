@@ -45,7 +45,7 @@ function StatusTemplateEditor({ surface }: { surface: TemplateSurface }) {
     ttl: scenario === 'warm' ? '~4m 09s left' : scenario === 'expired' ? 'Estimated TTL elapsed' : 'TTL not reported',
     firstRequest: scenario === 'unknown' ? 'unknown' : scenario === 'warm' ? 'hit' : 'miss',
     firstHit: scenario === 'unknown' ? null : scenario === 'warm', firstReadTokens: scenario === 'unknown' ? null : scenario === 'warm' ? 20000 : 0,
-    readTokens: 734800, writeTokens: 12000, inputTokens: 1000000, outputTokens: 2000, requests: 3,
+    readTokens: 734800, writeTokens: 12000, write5mTokens: 0, write1hTokens: 12000, cacheLifetime: '1h', inputTokens: 1000000, outputTokens: 2000, requests: 3,
     cost: 0.16225, costMin: 0.1608, costMax: 0.1637, savings: 0.12, hitRate: 0.73,
     provider: 'claude-code', model: 'claude-opus-5-5',
   };

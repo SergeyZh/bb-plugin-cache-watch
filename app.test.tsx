@@ -755,3 +755,41 @@ it('edits context and header templates separately and picks a distinct context d
   expect(stored.header).toBe(DEFAULT_STATUS_TEMPLATE);
   expect((header.getByRole('textbox', { name: 'Status template' }) as HTMLTextAreaElement).value).toBe(DEFAULT_STATUS_TEMPLATE);
 });
+
+it('shows the cache-write lifetime split only when telemetry reports it', async () => {
+  const { TurnUsageDetails } = await import('./thread-cache');
+  const step = { seq: 1, at: 1000, inputTokens: 10, outputTokens: 10, readTokens: 1000, writeTokens: 12000,
+    source: 'request' as const, messageId: 'msg', model: 'claude-opus-5-5', combined: false, incomplete: false };
+  const turn = { turnId: 't1', inputTokens: 10, outputTokens: 10, readTokens: 1000, writeTokens: 12000, firstReadTokens: 1000, note: null, steps: [step] };
+  const split = renderSlot({ component: TurnUsageDetails }, { turn: { ...turn, writeLifetimes: { fiveMinuteTokens: 2000, oneHourTokens: 9600, unknownTokens: 400 } } });
+  expect(split.getByText('Written by lifetime (≈): 5m 2k · 1h 10k · unknown 0k')).toBeTruthy();
+  split.lifecycle.unmount();
+  const plain = renderSlot({ component: TurnUsageDetails }, { turn });
+  unmounts.push(() => plain.lifecycle.unmount());
+  expect(plain.queryByText(/Written by lifetime/)).toBeNull();
+});
+
+it('shows session write lifetimes with their turn coverage', async () => {
+  const { SessionStatisticsPanel } = await import('./statistics-ui');
+  const n = (known: number) => ({ known, unknownTurns: 0 });
+  const slot = renderSlot({ component: SessionStatisticsPanel }, { threadId: 'thr_demo123' }, {
+    rpc: { session: () => ({ input: n(1), output: n(1), read: n(1), written: n(300), costMin: n(0), costMax: n(0),
+      keepaliveCostMin: n(0), keepaliveCostMax: n(0), unattributedReports: 0, totalTurns: 2, keepaliveTurns: 0, syncedThroughSeq: 10,
+      writeLifetimeTurns: 1, written5m: n(100), written1h: n(0), writtenUnknownLifetime: n(0), turns: [], nextBeforeSeq: null }) },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  expect(await slot.findByText('Cache written, 5m lifetime')).toBeTruthy();
+  expect(slot.getByText('1 of 2 turns; other turns report no lifetimes')).toBeTruthy();
+});
+
+it('recommends the Claude Code Telemetry provider only for built-in Claude Code', async () => {
+  const { TelemetryProviderHint, TELEMETRY_PROVIDER_URL } = await import('./thread-cache');
+  const builtIn = renderSlot({ component: TelemetryProviderHint }, { providerId: 'claude-code' });
+  expect(builtIn.getByRole('link', { name: 'Claude Code Telemetry provider' }).getAttribute('href')).toBe(TELEMETRY_PROVIDER_URL);
+  builtIn.lifecycle.unmount();
+  for (const providerId of ['claude-code-telemetry', 'codex']) {
+    const other = renderSlot({ component: TelemetryProviderHint }, { providerId });
+    expect(other.queryByRole('link')).toBeNull();
+    other.lifecycle.unmount();
+  }
+});

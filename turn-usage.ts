@@ -10,16 +10,23 @@ export const requestMetadataSchema = z.object({
   model: z.string().min(1).nullable(), incomplete: z.boolean(),
   counts: z.object({ inputTokens: count, outputTokens: count,
     cacheReadInputTokens: count.optional(), cacheWriteInputTokens: count.optional() }),
+  cacheWriteBreakdown: z.object({ fiveMinuteTokens: count, oneHourTokens: count,
+    unknownTokens: z.number().int().nonnegative() }).nullable().optional(),
 });
+// Cache writes by lifetime; `unknownTokens` were reported without a lifetime.
+const writeLifetimesSchema = z.object({ fiveMinuteTokens: z.number().int().nonnegative(),
+  oneHourTokens: z.number().int().nonnegative(), unknownTokens: z.number().int().nonnegative() });
+export type WriteLifetimes = z.infer<typeof writeLifetimesSchema>;
 export const turnUsageSchema = z.object({
   turnId: z.string().nullable(), readTokens: count, writeTokens: count,
   inputTokens: count, outputTokens: count,
   firstReadTokens: count, note: z.string().nullable(),
+  writeLifetimes: writeLifetimesSchema.nullable().optional(),
   steps: z.array(z.object({ seq: z.number(), at: z.number(), readTokens: count,
     writeTokens: count, inputTokens: count, outputTokens: count, combined: z.boolean(),
     source: z.enum(['request', 'aggregate-remainder', 'unattributed']).default('unattributed'),
     messageId: z.string().nullable().default(null), model: z.string().nullable().default(null),
-    incomplete: z.boolean().default(false) })),
+    incomplete: z.boolean().default(false), writeLifetimes: writeLifetimesSchema.nullable().optional() })),
 });
 export type TurnUsage = z.infer<typeof turnUsageSchema>;
 const number = (value: number | undefined): number | null =>
@@ -27,12 +34,30 @@ const number = (value: number | undefined): number | null =>
 const reads = (counts: Counts) => number(counts.cacheReadInputTokens ?? counts.cachedInputTokens);
 const difference = (current: number | null, previous: number | null) => current === null || previous === null ? null : current - previous;
 const empty = (note: string, turnId: string | null = null): TurnUsage =>
-  ({ turnId, steps: [], readTokens: null, writeTokens: null, inputTokens: null, outputTokens: null, firstReadTokens: null, note });
+  ({ turnId, steps: [], readTokens: null, writeTokens: null, inputTokens: null, outputTokens: null, firstReadTokens: null, writeLifetimes: null, note });
 const sum = (counts: (number | null)[]) => counts.every((n): n is number => n !== null)
   ? counts.reduce((a, b) => a + b, 0) : null;
 const same = (a: Counts, b: Counts) =>
   a.inputTokens === b.inputTokens && a.outputTokens === b.outputTokens && reads(a) === reads(b)
   && a.cacheWriteInputTokens === b.cacheWriteInputTokens && a.reasoningOutputTokens === b.reasoningOutputTokens;
+
+// Accept a breakdown only when it accounts for exactly the step's write count.
+function lifetimes(breakdown: z.infer<typeof requestMetadataSchema>['cacheWriteBreakdown'], write: number | null): WriteLifetimes | null {
+  if (!breakdown || write === null) return null;
+  const result = { fiveMinuteTokens: breakdown.fiveMinuteTokens ?? 0, oneHourTokens: breakdown.oneHourTokens ?? 0, unknownTokens: breakdown.unknownTokens };
+  return result.fiveMinuteTokens + result.oneHourTokens + result.unknownTokens === write ? result : null;
+}
+// Steps without a breakdown count as unknown lifetime; null when no step has one.
+function turnLifetimes(steps: TurnUsage['steps']): WriteLifetimes | null {
+  if (!steps.some(step => step.writeLifetimes)) return null;
+  const total = { fiveMinuteTokens: 0, oneHourTokens: 0, unknownTokens: 0 };
+  for (const step of steps) {
+    if (!step.writeLifetimes && step.writeTokens === null) return null;
+    const part = step.writeLifetimes ?? { fiveMinuteTokens: 0, oneHourTokens: 0, unknownTokens: step.writeTokens! };
+    total.fiveMinuteTokens += part.fiveMinuteTokens; total.oneHourTokens += part.oneHourTokens; total.unknownTokens += part.unknownTokens;
+  }
+  return total;
+}
 
 export function collectTurnUsage(rows: Event[], providerId = 'codex'): TurnUsage {
   const claude = providerId === 'claude-code' || providerId === 'claude-code-telemetry';
@@ -90,12 +115,14 @@ export function collectTurnUsage(rows: Event[], providerId = 'codex'): TurnUsage
       || outputDelta !== number(last.outputTokens) || readDelta !== reads(last));
     steps.push({ seq: report.seq, at: report.createdAt, readTokens: readDelta, writeTokens: writeDelta, inputTokens: inputDelta, outputTokens: outputDelta, combined,
       source: metadata?.source ?? 'unattributed', messageId: metadata?.messageId ?? null,
-      model: metadata?.model ?? null, incomplete: metadata?.incomplete ?? telemetry });
+      model: metadata?.model ?? null, incomplete: metadata?.incomplete ?? telemetry,
+      writeLifetimes: lifetimes(metadata?.cacheWriteBreakdown, writeDelta) });
     prior = total;
   }
   if (!steps.length) return empty('Waiting for new usage in this turn.', turnId);
   return { turnId, steps, inputTokens: sum(steps.map(step => step.inputTokens)), outputTokens: sum(steps.map(step => step.outputTokens)), readTokens: sum(steps.map(step => step.readTokens)),
     writeTokens: sum(steps.map(step => step.writeTokens)),
     firstReadTokens: steps[0].combined ? null : steps[0].readTokens,
+    writeLifetimes: turnLifetimes(steps),
     note: telemetry && steps.some(step => step.incomplete) ? 'Incomplete reports contain only observed tokens. Aggregate remainders may include subagents and are not individual requests.' : claude && !telemetry ? 'Claude Code reports aggregate usage per turn. First-request cache use is not exposed by this provider.' : steps.some(step => step.combined) ? 'Some reports combine requests; first-request cache use is unknown when the first report is combined.' : null };
 }

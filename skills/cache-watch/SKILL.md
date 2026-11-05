@@ -57,6 +57,10 @@ OpenAI rates. Claude input excludes cache read/write tokens; its combined cached
 counter includes reads plus writes and is not a cache-read counter. Price uncached
 input, output, reads and writes separately. Unknown fields/models stay unknown.
 Writes use a 5m–1h price range because BB's aggregate TTL does not expose the split.
+Claude Code Telemetry reports per-request 5m/1h write lifetimes: those writes use
+exact 1.25×/2× rates, and only writes with an unknown lifetime keep the range.
+`turn.writeLifetimes` in `status --json` holds the turn split (`fiveMinuteTokens`,
+`oneHourTokens`, `unknownTokens`); it is null when no lifetime is reported.
 BB emits Claude result usage as turn aggregates: first-request reuse is unknown,
 not inferred from the turn total. Provider/model/rate source and token categories
 are saved across reloads; legacy snapshots rebuild from retained telemetry.

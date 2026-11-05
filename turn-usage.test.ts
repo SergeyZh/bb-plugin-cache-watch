@@ -118,3 +118,25 @@ it('does not bind previous-turn metadata to a new turn with identical request co
   const result = collectTurnUsage([start(), telemetryMeta(2, a), start(3, 't2'), report(4, a, a, 't2')] as unknown as Rows, 'claude-code-telemetry');
   expect(result).toMatchObject({ turnId: 't2', firstReadTokens: null, steps: [{ source: 'unattributed', combined: true }] });
 });
+
+it('collects cache-write lifetimes per request and counts requests without a breakdown as unknown', () => {
+  const a = { ...counts(10, 0, 1000), cacheReadInputTokens: 0 };
+  const b = { ...counts(10, 1000, 300), cacheReadInputTokens: 1000 };
+  const c = { ...counts(10, 1300, 50), cacheReadInputTokens: 1300 };
+  const withBreakdown = (meta: ReturnType<typeof telemetryMeta>, cacheWriteBreakdown: unknown) =>
+    ({ ...meta, data: { ...meta.data, payload: { ...meta.data.payload, cacheWriteBreakdown } } });
+  const result = collectTurnUsage([start(),
+    withBreakdown(telemetryMeta(2, a), { fiveMinuteTokens: 0, oneHourTokens: 1000, unknownTokens: 0 }), report(3, a),
+    withBreakdown(telemetryMeta(4, b), { fiveMinuteTokens: 200, oneHourTokens: null, unknownTokens: 100 }),
+    report(5, { ...counts(20, 1000, 1300, 20), cacheReadInputTokens: 1000 }, b),
+    telemetryMeta(6, c), report(7, { ...counts(30, 2300, 1350, 30), cacheReadInputTokens: 2300 }, c)] as unknown as Rows, 'claude-code-telemetry');
+  expect(result.steps.map(step => step.writeLifetimes)).toEqual([
+    { fiveMinuteTokens: 0, oneHourTokens: 1000, unknownTokens: 0 },
+    { fiveMinuteTokens: 200, oneHourTokens: 0, unknownTokens: 100 }, null]);
+  expect(result).toMatchObject({ writeTokens: 1350, writeLifetimes: { fiveMinuteTokens: 200, oneHourTokens: 1000, unknownTokens: 150 } });
+  // A breakdown that does not account for the step's writes is ignored; no breakdown at all stays null.
+  const mismatched = collectTurnUsage([start(),
+    withBreakdown(telemetryMeta(2, a), { fiveMinuteTokens: 0, oneHourTokens: 999, unknownTokens: 0 }), report(3, a)] as unknown as Rows, 'claude-code-telemetry');
+  expect(mismatched.writeLifetimes).toBeNull();
+  expect(collectTurnUsage([start(), telemetryMeta(2, a), report(3, a)] as unknown as Rows, 'claude-code-telemetry').writeLifetimes).toBeNull();
+});

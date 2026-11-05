@@ -9,7 +9,7 @@ import {
 import { defaultStatusTemplate, renderStatusParts, templateData, type StatusTextPart } from './status-template';
 import { StatusTemplateText } from './status-template-ui';
 import { useStatusTemplate } from './template-settings';
-import type { TurnUsage } from './turn-usage';
+import type { TurnUsage, WriteLifetimes } from './turn-usage';
 import type { CacheStatus, rpcContract } from './server';
 import { costRange, usd, PRICING_URL, type CostEstimate } from './cost';
 
@@ -20,6 +20,11 @@ function timestamp(value: number | null | undefined): string {
   return value == null ? 'Unknown' : new Date(value).toLocaleString();
 }
 const explanation = 'Read/write totals cover the latest turn through its last usage report. Expanded details show each request and cache use on the first request. Reports may combine requests. These counts do not measure live cache size.';
+
+/** e.g. "5m 0 · 1h 12,000 · unknown 300"; the unknown part is omitted when zero. */
+export function writeLifetimesText(lifetimes: WriteLifetimes, format: (value: number) => string = value => value.toLocaleString()): string {
+  return `5m ${format(lifetimes.fiveMinuteTokens)} · 1h ${format(lifetimes.oneHourTokens)}${lifetimes.unknownTokens ? ` · unknown ${format(lifetimes.unknownTokens)}` : ''}`;
+}
 
 export function cacheResult(readTokens: number | null | undefined): 'hit' | 'miss' | 'unknown' {
   if (readTokens == null || !Number.isFinite(readTokens) || readTokens < 0) return 'unknown';
@@ -137,10 +142,21 @@ export function CostDetails({ cost }: { cost: CostEstimate | null | undefined })
         <dt className="text-muted-foreground">Turn input cache hit</dt><dd className="text-right tabular-nums">{cost.hitRate === null ? 'No input tokens' : `${(cost.hitRate * 100).toFixed(1)}%`}</dd>
       </>}
       {cost.model && <><dt className="text-muted-foreground">Cost model</dt><dd className="break-all text-right">{cost.model}</dd></>}
+      {cost.remainderModel && <><dt className="text-muted-foreground">Usage without a model (estimate)</dt><dd className="break-all text-right">priced as {cost.remainderModel}*</dd></>}
     </dl>
     <p className="text-muted-foreground">{cost.note}</p>
     <p className="text-muted-foreground">USD · <a href={cost.pricingUrl ?? PRICING_URL} target="_blank" rel="noreferrer" className="underline">{cost.pricingLabel ?? 'OpenAI Standard API rates'}</a> · {cost.pricingDate}</p>
   </div>;
+}
+
+export const TELEMETRY_PROVIDER_URL = 'https://github.com/SergeyZh/bb-plugin-claude-code-telemetry';
+/** Built-in Claude Code reports only turn aggregates; suggest the telemetry provider. */
+export function TelemetryProviderHint({ providerId }: { providerId: string | null | undefined }) {
+  if (providerId !== 'claude-code') return null;
+  return <p className="border-t pt-2 text-xs text-muted-foreground">
+    Built-in Claude Code reports only turn totals. For per-request cache hits, 5m/1h cache-write lifetimes and exact costs,
+    use the <a href={TELEMETRY_PROVIDER_URL} target="_blank" rel="noreferrer" className="underline">Claude Code Telemetry provider</a>.
+  </p>;
 }
 
 export function TurnUsageDetails({ turn }: { turn: TurnUsage | null | undefined }) {
@@ -159,6 +175,7 @@ export function TurnUsageDetails({ turn }: { turn: TurnUsage | null | undefined 
     {turn.steps.length > 0 && <>
       <p title={sources} className="break-words font-mono tabular-nums">Read (≈): {equation('readTokens')}</p>
       <p title={sources} className="break-words font-mono tabular-nums">Written (≈): {equation('writeTokens')}</p>
+      {turn.writeLifetimes && <p className="break-words font-mono tabular-nums">Written by lifetime (≈): {writeLifetimesText(turn.writeLifetimes, value => thousands(value))}</p>}
       {(hasCombined || hasIncomplete) && <p className="text-muted-foreground">{hasCombined ? '* Combined or unattributed usage, not one request.' : ''}{hasCombined && hasIncomplete ? ' ' : ''}{hasIncomplete ? '† Incomplete observed request.' : ''}</p>}
       <p className="text-muted-foreground">k = 1,000 tokens, rounded. ? = unreported. Written: provider-reported counts; zero does not prove no cache was created.</p>
     </>}
@@ -176,6 +193,7 @@ function CachePanel({ threadId, card = false, hideWhenEarly = false, sessionActi
     ['Cache used (first request)', <LastCacheUse readTokens={status?.turn?.firstReadTokens} />],
     ['Turn cache read', tokens(status?.turn?.readTokens)],
     ['Turn cache written', tokens(status?.turn?.writeTokens)],
+    ...status?.turn?.writeLifetimes ? [['Written by lifetime', writeLifetimesText(status.turn.writeLifetimes)] as [string, ReactNode]] : [],
     ['Last report', sample ? timestamp(sample.at) : 'Not reported'],
     ['Time left (estimate)', <TimeLeft remaining={remaining} assumed={assumed} />],
     ['Estimated expiry', <span className={remaining.color}>{timestamp(status?.estimatedExpiresAt)}</span>],
@@ -195,6 +213,7 @@ function CachePanel({ threadId, card = false, hideWhenEarly = false, sessionActi
       </button>
     </div>
     <TurnUsageDetails turn={status?.turn} />
+    <TelemetryProviderHint providerId={status?.providerId} />
     <CostDetails cost={status?.cost} />
     <KeepaliveControls key={threadId} threadId={threadId} status={status} refresh={refresh} />
   </div>;

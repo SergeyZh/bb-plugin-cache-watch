@@ -94,11 +94,20 @@ export default async function plugin(bb: BbPluginApi) {
     ]);
     const watch = watches.find(w => w.threadId === threadId) ?? null;
     const expiry = estimateExpiry(thread.providerId, last, context.usage?.compactionOfferAt);
+    let turn = collectTurnUsage(costRows, thread.providerId);
+    let cost = estimateTurnCost(thread.providerId, costRows);
+    // BB keeps only the last usage report of a finished turn; saved statistics
+    // retain every report collected while the turn ran.
+    try {
+      await statistics.sync(threadId, thread.providerId);
+      const saved = turn.turnId === null ? null : statistics.turn(threadId, turn.turnId);
+      if (saved && saved.turn.steps.length > 0) ({ turn, cost } = saved);
+    } catch { /* Keep the live calculation. */ }
     const due = watch ? nextPingAt(watch, expiry.at) : null;
     return {
       threadId, title: thread.title ?? thread.titleFallback ?? threadId,
       providerId: thread.providerId, status: thread.runtime.displayStatus,
-      turn: collectTurnUsage(costRows, thread.providerId), cost: estimateTurnCost(thread.providerId, costRows), sample: last, estimatedExpiresAt: expiry.at,
+      turn, cost, sample: last, estimatedExpiresAt: expiry.at,
       expirySource: expiry.source,
       watch, nextPingAt: watch && !watch.disabled && watch.until > Date.now() && expiry.at !== null && expiry.at > Date.now() && due !== null && due < watch.until ? due : null,
     };

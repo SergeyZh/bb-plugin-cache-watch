@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { collectTurnUsage } from './turn-usage';
+import { collectTurnUsage, type WriteLifetimes } from './turn-usage';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 type ThreadEventRow = Awaited<ReturnType<BbPluginApi['sdk']['threads']['events']['list']>>[number];
 
@@ -23,6 +23,8 @@ export const costSchema = z.object({
   readSavingsUsd: z.number().nullable(), hitRate: z.number().nullable(),
   inputTokens: z.number().nullable(), outputTokens: z.number().nullable(),
   note: z.string(), pricingDate: z.string(),
+  // Set when usage without a model was priced at this assumed model.
+  remainderModel: z.string().nullable().optional(),
 });
 export type CostEstimate = z.infer<typeof costSchema>;
 type Calculation = Omit<CostEstimate, 'providerId' | 'pricingUrl' | 'pricingLabel'>;
@@ -117,12 +119,17 @@ const claudeRates: Record<string, { input: number; read: number; output: number 
   'claude-sonnet-4': { input: 3, read: 0.3, output: 15 },
   'claude-haiku-4-5': { input: 1, read: 0.1, output: 5 },
 };
-export function priceClaudeTokens(model: string, input: number, read: number, output: number, write: number) {
+// Writes cost 1.25× input for a 5-minute lifetime and 2× for one hour. Writes
+// without a reported lifetime are bounded by those two rates.
+export function priceClaudeTokens(model: string, input: number, read: number, output: number, write: number, lifetimes: WriteLifetimes | null = null) {
   const rate = claudeRates[model.replace(/\[1m\]$/, '').replace(/-\d{8}$/, '')];
   if (!rate || ![input, read, output, write].every(valid)) return null;
-  const base = input * rate.input + read * rate.read + output * rate.output;
-  return { minUsd: (base + write * rate.input * 1.25) / 1e6,
-    maxUsd: (base + write * rate.input * 2) / 1e6,
+  const split = lifetimes && lifetimes.fiveMinuteTokens + lifetimes.oneHourTokens + lifetimes.unknownTokens === write
+    ? lifetimes : { fiveMinuteTokens: 0, oneHourTokens: 0, unknownTokens: write };
+  const base = input * rate.input + read * rate.read + output * rate.output
+    + (split.fiveMinuteTokens * 1.25 + split.oneHourTokens * 2) * rate.input;
+  return { minUsd: (base + split.unknownTokens * rate.input * 1.25) / 1e6,
+    maxUsd: (base + split.unknownTokens * rate.input * 2) / 1e6,
     readSavingsUsd: read * (rate.input - rate.read) / 1e6,
     hitRate: input + read + write > 0 ? read / (input + read + write) : null };
 }
@@ -141,18 +148,27 @@ function estimateClaudeCost(rows: ThreadEventRow[], providerId: string): Calcula
   if (providerId === 'claude-code-telemetry') {
     const models = [...new Set(usage.steps.map(step => step.model).filter((model): model is string => model !== null))];
     const label = models.join(' + ') || model;
-    if (usage.steps.some(step => step.source !== 'request' || !step.model))
-      return unavailable('Telemetry has aggregate or unattributed usage without a model. Tokens are saved, but a full-turn cost cannot be attributed safely.', label, usage.turnId);
+    // Usage without a model (aggregate remainder, possibly subagents) is
+    // estimated at the turn's only model; mixed models leave it unpriced.
+    const unattributed = usage.steps.filter(step => !step.model);
+    const fallback = unattributed.length === 0 ? null : models.length === 1 ? models[0]! : models.length === 0 ? model : null;
+    if (unattributed.length > 0 && !fallback)
+      return unavailable('Telemetry has usage without a model in a turn with several models. Tokens are saved, but a full-turn cost cannot be attributed safely.', label, usage.turnId);
     const prices = usage.steps.map(step => step.inputTokens === null || step.outputTokens === null || step.readTokens === null || step.writeTokens === null
-      ? null : priceClaudeTokens(step.model!, step.inputTokens, step.readTokens, step.outputTokens, step.writeTokens));
+      ? null : priceClaudeTokens(step.model ?? fallback!, step.inputTokens, step.readTokens, step.outputTokens, step.writeTokens, step.writeLifetimes));
     if (prices.some(price => price === null)) return unavailable('Request model rates or token counters are unavailable.', label, usage.turnId);
     const priced = prices.filter((price): price is NonNullable<typeof price> => price !== null);
     return { model: label, turnId: usage.turnId, inputTokens: input, outputTokens: output, pricingDate: PRICING_DATE,
       minUsd: priced.reduce((sum, price) => sum + price.minUsd, 0), maxUsd: priced.reduce((sum, price) => sum + price.maxUsd, 0),
       readSavingsUsd: priced.reduce((sum, price) => sum + price.readSavingsUsd, 0),
       hitRate: input !== null && read !== null && write !== null && input + read + write > 0 ? read / (input + read + write) : null,
-      note: 'Claude Code Telemetry: each request uses its reported model and Anthropic Standard API rates. Write range: 5m–1h. Excludes tools, Fast mode, regional and long-context surcharges; not subscription billing.'
-        + (usage.steps.some(step => step.incomplete) ? ' Incomplete requests include observed tokens only.' : '') };
+      note: 'Claude Code Telemetry: each request uses its reported model and Anthropic Standard API rates. '
+        + (usage.steps.every(step => step.writeTokens === 0 || step.writeLifetimes?.unknownTokens === 0)
+          ? 'Cache writes use reported lifetimes: 5m at 1.25×, 1h at 2× input.' : 'Writes without a reported lifetime use a 5m–1h range.')
+        + ' Excludes tools, Fast mode, regional and long-context surcharges; not subscription billing.'
+        + (usage.steps.some(step => step.incomplete) ? ' Incomplete requests include observed tokens only.' : '')
+        + (fallback ? ` Estimate: usage without a model (aggregate remainder, may include subagents) is priced at ${fallback} rates.` : ''),
+      ...(fallback ? { remainderModel: fallback } : {}) };
   }
 
   if (input === null || output === null || read === null || write === null)
