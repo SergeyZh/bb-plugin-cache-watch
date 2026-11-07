@@ -3,7 +3,7 @@
 Inspect prompt-cache usage in [BB](https://getbb.app) and optionally keep selected
 idle threads active with time-limited, paid keepalive turns.
 
-Version **0.3.2**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
+Version **0.3.3**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
 Verified with BB 0.48.1 / SDK 0.6.104 on macOS.
 
 ## Thread panel
@@ -161,9 +161,12 @@ restarts across turns do not discard that turn's reported usage.
 
 Anthropic rates were checked on **2026-11-01** against
 [Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing).
-Bundled cards cover Opus 5.5/5/4.8/4.7/4.6/4.5/4.1/4, Sonnet 5.5/5/4.6/4.5/4,
-and Haiku 4.5, including dated IDs of those models. Unknown aliases/models have
-no estimate. Write cost is a **5-minute–1-hour range** (1.25×–2× base input),
+Bundled cards cover Fable 5.1/5, Opus 5.5/5/4.8/4.7/4.6/4.5/4.1/4,
+Sonnet 5.5/5/4.6/4.5/4, and Haiku 5.5/4.5, including dated IDs of those models
+(Fable and Haiku 5.5 rates added on 2026-11-07). Haiku 5.5 has a second rate
+card for requests whose prompt exceeds 100K tokens: Telemetry requests use the
+matching card, while turn totals above 100K show a range across both cards.
+Unknown aliases/models have no estimate. Write cost is a **5-minute–1-hour range** (1.25×–2× base input),
 since BB's aggregate TTL cannot separate mixed write lifetimes; Claude Code
 Telemetry lifetimes replace that range with exact rates. Missing Claude
 write/read counts yield an unavailable cost rather than an assumed zero. BB does
@@ -194,7 +197,7 @@ write premiums or keepalive costs and are not a net savings claim.
 Once the repository and first release are published:
 
 ```sh
-bb plugin install git:https://github.com/SergeyZh/bb-plugin-cache-watch.git@v0.3.2
+bb plugin install git:https://github.com/SergeyZh/bb-plugin-cache-watch.git@v0.3.3
 ```
 
 For compatible 0.x updates, use `@^0.3.0` instead of the exact tag. BB builds Git

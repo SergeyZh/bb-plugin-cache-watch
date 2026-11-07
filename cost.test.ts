@@ -95,6 +95,31 @@ it('prices Claude uncached input, output, reads and writes as separate categorie
   expect(priceClaudeTokens('opus', 100, 50000, 1000, 10000)).toBeNull();
 });
 
+it('prices Claude Fable models, including the cheaper Fable 5.1 cache reads', async () => {
+  const { priceClaudeTokens } = await import('./cost');
+  const fable51 = priceClaudeTokens('claude-fable-5-1', 100, 50000, 1000, 10000)!;
+  expect(fable51.minUsd).toBeCloseTo(0.1885);
+  expect(fable51.maxUsd).toBeCloseTo(0.2635);
+  expect(fable51.readSavingsUsd).toBeCloseTo(0.4875);
+  expect(priceClaudeTokens('claude-fable-5-1[1m]', 100, 50000, 1000, 10000)).toEqual(fable51);
+  expect(priceClaudeTokens('claude-fable-5', 100, 50000, 1000, 10000)?.minUsd).toBeCloseTo(0.226);
+});
+
+it('prices Claude Haiku 5.5 with a long-prompt rate card above 100K prompt tokens', async () => {
+  const { priceClaudeTokens } = await import('./cost');
+  // 60,100 prompt tokens: short rate card whether or not usage is per request.
+  expect(priceClaudeTokens('claude-haiku-5-5', 100, 50000, 1000, 10000)).toMatchObject({ minUsd: 0.00226, maxUsd: 0.00301 });
+  expect(priceClaudeTokens('claude-haiku-5-5', 100, 50000, 1000, 10000, null, true)).toMatchObject({ minUsd: 0.00226, maxUsd: 0.00301 });
+  // 160,100 prompt tokens in one request: long rate card.
+  const long = priceClaudeTokens('claude-haiku-5-5', 100, 150000, 1000, 10000, null, true)!;
+  expect(long.minUsd).toBeCloseTo(0.0163);
+  expect(long.maxUsd).toBeCloseTo(0.02005);
+  // Summed usage above the threshold may mix both cards.
+  const summed = priceClaudeTokens('claude-haiku-5-5', 100, 150000, 1000, 10000)!;
+  expect(summed.minUsd).toBeCloseTo(0.00326);
+  expect(summed.maxUsd).toBeCloseTo(0.02005);
+});
+
 it('keeps Claude pricing/source distinct from Codex and preserves unknown model rates', () => {
   const rows = history('claude-opus-5-5');
   for (const row of rows) if (row.type === 'thread/tokenUsage/updated') {

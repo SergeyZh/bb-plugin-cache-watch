@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3 — 2026-11-07
+
+- Price Claude Fable 5.1 ($10 / $0.25 cache read / $50 per MTok) and Fable 5
+  ($10 / $1 / $50). Fable turns previously showed no cost.
+- Price Claude Haiku 5.5 with its two rate cards: $0.10 / $0.01 / $0.50 for
+  prompts up to 100K tokens and $0.50 / $0.05 / $2.50 above. Claude Code
+  Telemetry requests use the matching card; Claude Code turn totals above 100K
+  show a range across both cards.
+- Upgrade saved statistics once (revision 5), so finished Fable and Haiku 5.5
+  turns get a cost from their retained reports.
+
 ## 0.3.2 — 2026-11-05
 
 - Link the Claude Code Telemetry provider in the plugin description, and

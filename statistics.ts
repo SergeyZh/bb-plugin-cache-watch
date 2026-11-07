@@ -29,7 +29,8 @@ export type SessionStatistics = z.infer<typeof sessionStatisticsSchema>;
 
 // Bump when saved snapshots must be recomputed. 3: re-read retained events for
 // cache-write lifetimes. 4: estimate usage without a model at the turn's model.
-const REVISION = 4;
+// 5: price Claude Fable and Haiku 5.5 models.
+const REVISION = 5;
 
 export function createStatistics(bb: BbPluginApi) {
   const db = bb.storage.database();

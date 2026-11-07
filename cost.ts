@@ -103,9 +103,17 @@ function estimateCodexCost(providerId: string, rows: ThreadEventRow[]): Calculat
 }
 
 // Anthropic input excludes both cache reads and writes. Rates are USD / MTok.
-const claudeRates: Record<string, { input: number; read: number; output: number }> = {
+type ClaudeRate = { input: number; read: number; output: number };
+// Models with a second rate card for requests whose prompt exceeds `threshold`.
+const claudeLongPromptRates: Record<string, ClaudeRate & { threshold: number }> = {
+  'claude-haiku-5-5': { threshold: 100_000, input: 0.5, read: 0.05, output: 2.5 },
+};
+const claudeRates: Record<string, ClaudeRate> = {
+  'claude-fable-5-1': { input: 10, read: 0.25, output: 50 },
+  'claude-fable-5': { input: 10, read: 1, output: 50 },
   'claude-opus-5-5': { input: 4, read: 0.2, output: 20 },
   'claude-sonnet-5-5': { input: 2, read: 0.1, output: 10 },
+  'claude-haiku-5-5': { input: 0.1, read: 0.01, output: 0.5 },
   'claude-opus-5': { input: 5, read: 0.5, output: 25 },
   'claude-opus-4-8': { input: 5, read: 0.5, output: 25 },
   'claude-opus-4-7': { input: 5, read: 0.5, output: 25 },
@@ -119,18 +127,27 @@ const claudeRates: Record<string, { input: number; read: number; output: number 
   'claude-sonnet-4': { input: 3, read: 0.3, output: 15 },
   'claude-haiku-4-5': { input: 1, read: 0.1, output: 5 },
 };
+const claudeModelId = (model: string) => model.replace(/\[1m\]$/, '').replace(/-\d{8}$/, '');
 // Writes cost 1.25× input for a 5-minute lifetime and 2× for one hour. Writes
-// without a reported lifetime are bounded by those two rates.
-export function priceClaudeTokens(model: string, input: number, read: number, output: number, write: number, lifetimes: WriteLifetimes | null = null) {
-  const rate = claudeRates[model.replace(/\[1m\]$/, '').replace(/-\d{8}$/, '')];
-  if (!rate || ![input, read, output, write].every(valid)) return null;
+// without a reported lifetime are bounded by those two rates. The long-prompt
+// rate card applies per request; for summed usage above the threshold
+// (`singleRequest` false), the range spans both rate cards.
+export function priceClaudeTokens(model: string, input: number, read: number, output: number, write: number,
+  lifetimes: WriteLifetimes | null = null, singleRequest = false) {
+  const id = claudeModelId(model);
+  const short = claudeRates[id];
+  if (!short || ![input, read, output, write].every(valid)) return null;
+  const long = claudeLongPromptRates[id];
+  const overThreshold = long !== undefined && input + read + write > long.threshold;
+  const low = overThreshold && singleRequest ? long : short;
+  const high = overThreshold ? long : short;
   const split = lifetimes && lifetimes.fiveMinuteTokens + lifetimes.oneHourTokens + lifetimes.unknownTokens === write
     ? lifetimes : { fiveMinuteTokens: 0, oneHourTokens: 0, unknownTokens: write };
-  const base = input * rate.input + read * rate.read + output * rate.output
+  const base = (rate: ClaudeRate) => input * rate.input + read * rate.read + output * rate.output
     + (split.fiveMinuteTokens * 1.25 + split.oneHourTokens * 2) * rate.input;
-  return { minUsd: (base + split.unknownTokens * rate.input * 1.25) / 1e6,
-    maxUsd: (base + split.unknownTokens * rate.input * 2) / 1e6,
-    readSavingsUsd: read * (rate.input - rate.read) / 1e6,
+  return { minUsd: (base(low) + split.unknownTokens * low.input * 1.25) / 1e6,
+    maxUsd: (base(high) + split.unknownTokens * high.input * 2) / 1e6,
+    readSavingsUsd: read * (low.input - low.read) / 1e6,
     hitRate: input + read + write > 0 ? read / (input + read + write) : null };
 }
 function estimateClaudeCost(rows: ThreadEventRow[], providerId: string): Calculation {
@@ -155,7 +172,7 @@ function estimateClaudeCost(rows: ThreadEventRow[], providerId: string): Calcula
     if (unattributed.length > 0 && !fallback)
       return unavailable('Telemetry has usage without a model in a turn with several models. Tokens are saved, but a full-turn cost cannot be attributed safely.', label, usage.turnId);
     const prices = usage.steps.map(step => step.inputTokens === null || step.outputTokens === null || step.readTokens === null || step.writeTokens === null
-      ? null : priceClaudeTokens(step.model ?? fallback!, step.inputTokens, step.readTokens, step.outputTokens, step.writeTokens, step.writeLifetimes));
+      ? null : priceClaudeTokens(step.model ?? fallback!, step.inputTokens, step.readTokens, step.outputTokens, step.writeTokens, step.writeLifetimes, step.source === 'request'));
     if (prices.some(price => price === null)) return unavailable('Request model rates or token counters are unavailable.', label, usage.turnId);
     const priced = prices.filter((price): price is NonNullable<typeof price> => price !== null);
     return { model: label, turnId: usage.turnId, inputTokens: input, outputTokens: output, pricingDate: PRICING_DATE,
@@ -177,7 +194,9 @@ function estimateClaudeCost(rows: ThreadEventRow[], providerId: string): Calcula
   if (!price) return unavailable('No verified Anthropic API rate for the recorded Claude model.', model, usage.turnId);
   return { ...price, model, turnId: usage.turnId, inputTokens: input, outputTokens: output, pricingDate: PRICING_DATE,
     note: 'Claude Code turn usage. Anthropic Standard API equivalent for the selected model; BB does not expose per-model SDK cost. Not a bill or subscription-limit estimate. Input excludes cache reads/writes, which are priced separately. Excludes tools, Fast mode, regional and long-context surcharges.'
-      + (write > 0 ? ' Range uses 5m–1h write rates: the aggregate TTL report cannot separate mixed write lifetimes.' : '') };
+      + (write > 0 ? ' Range uses 5m–1h write rates: the aggregate TTL report cannot separate mixed write lifetimes.' : '')
+      + (input + read + write > (claudeLongPromptRates[claudeModelId(model!)]?.threshold ?? Infinity)
+        ? ' Range spans both prompt-length rate cards: turn totals cannot show which requests exceeded the threshold.' : '') };
 }
 export function estimateTurnCost(providerId: string, rows: ThreadEventRow[]): CostEstimate {
   const claude = providerId === 'claude-code' || providerId === 'claude-code-telemetry';
