@@ -18,7 +18,7 @@ describe('whole-turn cache usage', () => {
     const result = collect([start(), report(2, counts(100, 0, 50)),
       report(3, counts(300, 150, 70, 20), counts(200, 150, 20)),
       report(4, counts(600, 400, 70, 30), counts(300, 250))]);
-    expect(result).toMatchObject({ readTokens: 400, writeTokens: 70, firstReadTokens: 0, note: null });
+    expect(result).toMatchObject({ readTokens: 400, writeTokens: 70, firstReadTokens: 0, firstPromptTokens: 100, note: null });
     expect(result.steps.map(step => [step.readTokens, step.writeTokens, step.combined])).toEqual([
       [0, 50, false], [150, 20, false], [250, 0, false],
     ]);
@@ -88,6 +88,16 @@ const telemetryMeta = (seq: number, last: ReturnType<typeof counts>, source = 'r
   seq, type: 'thread/extensionState/updated', scope: { kind: 'thread' },
   data: { kind: 'claude-code-telemetry/usage', payload: { source, incomplete, model,
     messageId: source === 'request' ? `message-${seq}` : null, counts: last } },
+});
+it('reports the whole first prompt of a new session whose first request reads a shared prefix', () => {
+  // Recorded from a new Claude Code Telemetry session: the first request already reads 13,220 tokens.
+  const first = { ...counts(2, 32416, 19196, 8), cacheReadInputTokens: 13220 };
+  const second = { ...counts(2, 35470, 3054, 17), cacheReadInputTokens: 32416 };
+  const result = collectTurnUsage([start(), telemetryMeta(2, first), report(3, first), telemetryMeta(4, second),
+    report(5, { ...counts(4, 67886, 22250, 25), cacheReadInputTokens: 45636 }, second)] as unknown as Rows, 'claude-code-telemetry');
+  expect(result).toMatchObject({ firstReadTokens: 13220, firstPromptTokens: 2 + 13220 + 19196, readTokens: 45636 });
+  expect(result.steps).toHaveLength(2);
+  expect(collectTurnUsage([start(), report(3, first)] as unknown as Rows, 'claude-code-telemetry').firstPromptTokens).toBeNull();
 });
 it('retains request identity/model and preserves a first miss despite subsequent hits and residuals', () => {
   const a = { ...counts(10, 0, 0), cacheReadInputTokens: 0 };

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 — 2026-11-11
+
+- Show how much of the first request's prompt was read from the cache
+  (`first: hit 40%`, "Partly — 13,220 of 32,418 prompt tokens read from cache").
+  A new session's first request reads a prefix cached by other sessions, which
+  previously looked like a full hit.
+- Show the number of requests in each turn in turn history and turn details.
+- Price Claude Fable 5.2 ($8 / $0.20 cache read / $40 per MTok). Its turns
+  previously showed no cost. Also price GPT-6 Sol ($2 / $0.20 / $10), GPT-5.6
+  Terra ($2 / $0.20 / $12) and GPT-5.6 Luna ($0.20 / $0.02 / $1.20).
+- Keepalive panel: the Hours field no longer resets to 6 while a lease exists;
+  it shows the lease's duration, and the status line says what it was set for.
+- Upgrade saved statistics once (revision 7) to add the first-request prompt
+  size and the new rates.
+
 ## 0.3.3 — 2026-11-07
 
 - Price Claude Fable 5.1 ($10 / $0.25 cache read / $50 per MTok) and Fable 5

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRealtime, useRpc, type ExperimentalMessageMetadataProps } from '@get-bb/plugin-sdk/app';
 import type { rpcContract } from './server';
 import type { SavedTurn, SessionStatistics } from './statistics';
-import { CostDetails, LastCacheUse, TurnUsageDetails, cacheResult, writeLifetimesText } from './thread-cache';
+import { CostDetails, LastCacheUse, TurnUsageDetails, firstLabel, requestCount, writeLifetimesText } from './thread-cache';
 import { compactCost, costRange, usd } from './cost';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './components/ui/dialog';
 
@@ -12,7 +12,7 @@ const compact = (n: number | null) => n === null ? '?' : new Intl.NumberFormat(u
 function SavedTurnDetails({ saved }: { saved: SavedTurn }) {
   return <div className="space-y-3 text-sm">
     <p>{providerName(saved.providerId ?? saved.cost.providerId)} · {new Date(saved.startedAt).toLocaleString()} · {saved.completed ? 'Completed' : 'Usage so far'}{saved.keepalive ? ' · Keepalive' : ''}</p>
-    <p>First request: <LastCacheUse readTokens={saved.turn.firstReadTokens} /></p>
+    <p>{requestCount(saved.turn)} in this turn · first request: <LastCacheUse turn={saved.turn} /></p>
     <p>{(saved.providerId === 'claude-code' || saved.providerId === 'claude-code-telemetry') ? 'Input (uncached)' : 'Input'}: {tokens(saved.turn.inputTokens)} · Output: {tokens(saved.turn.outputTokens)}</p>
     <TurnUsageDetails turn={saved.turn} />
     <CostDetails cost={saved.cost} />
@@ -42,7 +42,7 @@ function TurnMarker({ threadId, turnId }: { threadId: string; turnId: string }) 
   useRealtime('statistics-changed', (payload) => {
     if ((payload as { threadId?: string } | null)?.threadId === threadId && !latest.current?.completed) void refresh();
   });
-  const label = saved ? `Cache · first: ${cacheResult(saved.turn.firstReadTokens)} · ${compact(saved.turn.readTokens)} read${saved.cost.minUsd !== null ? ` · ~${compactCost(saved.cost)}` : ''}`
+  const label = saved ? `Cache · first: ${firstLabel(saved.turn)} · ${compact(saved.turn.readTokens)} read${saved.cost.minUsd !== null ? ` · ~${compactCost(saved.cost)}` : ''}`
     : error ? 'Cache · unavailable' : 'Cache · collecting';
   return <>
     <button type="button" aria-label={`Turn cache statistics: ${label}`} onClick={() => { setOpen(true); void refresh(); }}
@@ -119,7 +119,7 @@ export function SessionStatisticsPanel({ threadId }: { threadId: string }) {
       <p className="text-xs text-muted-foreground">Includes usage reported so far and keepalive. Missing values are excluded from known subtotals and counted separately. Cost uses each turn's saved API rate estimate.</p>
       <div className="max-h-96 space-y-2 overflow-y-auto">
         {data.turns.map(saved => <details key={saved.turnId} className="rounded border p-2">
-          <summary className="cursor-pointer text-xs">{new Date(saved.startedAt).toLocaleString()} · first: {cacheResult(saved.turn.firstReadTokens)} · {compact(saved.turn.readTokens)} read · {compact(saved.turn.writeTokens)} written{saved.turn.writeLifetimes ? ` (${writeLifetimesText(saved.turn.writeLifetimes, compact)})` : ''}{saved.keepalive ? ' · keepalive' : ''} · {costRange(saved.cost)}</summary>
+          <summary className="cursor-pointer text-xs">{new Date(saved.startedAt).toLocaleString()} · {requestCount(saved.turn)} · first: {firstLabel(saved.turn)} · {compact(saved.turn.readTokens)} read · {compact(saved.turn.writeTokens)} written{saved.turn.writeLifetimes ? ` (${writeLifetimesText(saved.turn.writeLifetimes, compact)})` : ''}{saved.keepalive ? ' · keepalive' : ''} · {costRange(saved.cost)}</summary>
           <div className="pt-3"><SavedTurnDetails saved={saved} /></div>
         </details>)}
       </div>

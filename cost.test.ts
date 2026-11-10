@@ -103,6 +103,13 @@ it('prices Claude Fable models, including the cheaper Fable 5.1 cache reads', as
   expect(fable51.readSavingsUsd).toBeCloseTo(0.4875);
   expect(priceClaudeTokens('claude-fable-5-1[1m]', 100, 50000, 1000, 10000)).toEqual(fable51);
   expect(priceClaudeTokens('claude-fable-5', 100, 50000, 1000, 10000)?.minUsd).toBeCloseTo(0.226);
+  // Fable 5.2: $8 input, $0.20 cache read, $40 output.
+  const fable52 = priceClaudeTokens('claude-fable-5-2', 100, 50000, 1000, 10000)!;
+  expect(fable52.minUsd).toBeCloseTo(0.1508);
+  expect(fable52.maxUsd).toBeCloseTo(0.2108);
+  expect(priceTokens('gpt-6-sol', 1e6, 800000, 100000, 0)?.minUsd).toBeCloseTo(1.56);
+  expect(priceTokens('gpt-5.6-terra', 1e6, 800000, 100000, 0)?.minUsd).toBeCloseTo(1.76);
+  expect(priceTokens('gpt-5.6-luna', 1e6, 800000, 100000, 0)?.minUsd).toBeCloseTo(0.176);
 });
 
 it('prices Claude Haiku 5.5 with a long-prompt rate card above 100K prompt tokens', async () => {

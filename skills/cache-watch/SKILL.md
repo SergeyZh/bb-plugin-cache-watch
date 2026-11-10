@@ -13,7 +13,9 @@ rounded to thousands (`k`), including all-zero written sums. Per-request tables
 are not displayed. Composer details have bounded scrolling; the highlighted Cache row with a
 chevron toggles them open/closed. There is no separate Close button there. The overall cache-use indicator uses the FIRST
 request in that turn, not its last request or the sum. Positive reads mean reuse,
-zero reads mean no reuse, and missing counts remain unknown. Writes alone are
+zero reads mean no reuse, and missing counts remain unknown. A hit also shows the share of the first request's prompt that was read (`hit 40%`);
+a new session's first request can be a partial hit on a prefix cached by other
+sessions. Turn history rows show the number of requests in each turn. Writes alone are
 not reuse; a reported zero write count does not prove no cache was created.
 Duplicate cumulative reports are skipped. New turns wait for new usage. Missing
 boundaries, counter resets and provider session changes yield unavailable sums;

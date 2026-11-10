@@ -66,7 +66,7 @@ function CacheWatchPage() {
       <p className="text-muted-foreground">{status.providerId} · {status.status}</p>
       <dl className="grid grid-cols-2 gap-2">
         <dt>Last usage report</dt><dd>{time(status.sample?.at ?? null)}</dd>
-        <dt>Cache used (first request)</dt><dd><LastCacheUse readTokens={status.turn?.firstReadTokens} /></dd>
+        <dt>Cache used (first request)</dt><dd><LastCacheUse turn={status.turn} /></dd>
         <dt>Turn cached tokens read</dt><dd>{status.turn?.readTokens?.toLocaleString() ?? 'Not reported'}</dd>
         <dt>Turn cache tokens written</dt><dd>{status.turn?.writeTokens?.toLocaleString() ?? 'Not reported'}</dd>
         <dt>Estimated cache expiry{status.expirySource === 'codex-assumption' ? ' (assumed 30m)' : ''}</dt><dd className={status.estimatedExpiresAt === null ? '' : status.estimatedExpiresAt > Date.now() ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}>{time(status.estimatedExpiresAt)}</dd>

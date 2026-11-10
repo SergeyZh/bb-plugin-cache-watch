@@ -3,7 +3,7 @@
 Inspect prompt-cache usage in [BB](https://getbb.app) and optionally keep selected
 idle threads active with time-limited, paid keepalive turns.
 
-Version **0.3.3**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
+Version **0.4.0**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
 Verified with BB 0.48.1 / SDK 0.6.104 on macOS.
 
 ## Thread panel
@@ -28,6 +28,11 @@ available.
 - **Hit** means the provider reported cache reads greater than zero, including
   partial reuse. **Miss** means it reported zero reads; cache writes alone are
   not reuse. Missing telemetry is shown as unreported, never as a miss.
+- A first-request hit shows how much of that request's prompt was read, for
+  example `hit 40%`. The first request of a new session can already be a partial
+  hit: the provider reuses a prefix (system prompt, tools) cached by other sessions.
+- One turn usually makes several model requests (one per tool round). Turn
+  history shows the number of requests next to each turn.
 - A hit/miss describes the recorded request(s). It does not establish the exact
   cache lifetime: a miss can also reflect changed prompt prefixes or routing.
 - Telemetry refreshes every 30 seconds. The countdown ticks locally every second.
@@ -161,9 +166,9 @@ restarts across turns do not discard that turn's reported usage.
 
 Anthropic rates were checked on **2026-11-01** against
 [Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing).
-Bundled cards cover Fable 5.1/5, Opus 5.5/5/4.8/4.7/4.6/4.5/4.1/4,
+Bundled cards cover Fable 5.2/5.1/5, Opus 5.5/5/4.8/4.7/4.6/4.5/4.1/4,
 Sonnet 5.5/5/4.6/4.5/4, and Haiku 5.5/4.5, including dated IDs of those models
-(Fable and Haiku 5.5 rates added on 2026-11-07). Haiku 5.5 has a second rate
+(Fable and Haiku 5.5 rates added on 2026-11-07, Fable 5.2 on 2026-11-11). Haiku 5.5 has a second rate
 card for requests whose prompt exceeds 100K tokens: Telemetry requests use the
 matching card, while turn totals above 100K show a range across both cards.
 Unknown aliases/models have no estimate. Write cost is a **5-minute–1-hour range** (1.25×–2× base input),
@@ -182,8 +187,9 @@ bills, Central charges, purchased-credit charges, or subscription-limit usage.
 Tool fees, speed modes, regional uplifts, and long-context surcharges are excluded.
 Rates were checked on **2026-11-01** against [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)
 and are bundled locally; viewing costs makes no external pricing or model calls.
-Supported OpenAI rate cards: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`,
-and `gpt-5.6-sol` (the published promotional rate). Unknown models have no estimate.
+Supported OpenAI rate cards: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`,
+`gpt-5.6-sol` (the published promotional rate), `gpt-5.6-terra` and `gpt-5.6-luna`
+(the last three and `gpt-6-sol` added on 2026-11-11). Unknown models have no estimate.
 
 For Codex, when cache-write lifetime is unknown, cost is a range using 30-minute and 12-hour
 write rates. When write counts are missing, the lower bound treats uncached input
@@ -197,7 +203,7 @@ write premiums or keepalive costs and are not a net savings claim.
 Once the repository and first release are published:
 
 ```sh
-bb plugin install git:https://github.com/SergeyZh/bb-plugin-cache-watch.git@v0.3.3
+bb plugin install git:https://github.com/SergeyZh/bb-plugin-cache-watch.git@v0.4.0
 ```
 
 For compatible 0.x updates, use `@^0.3.0` instead of the exact tag. BB builds Git
@@ -333,7 +339,9 @@ and context card; unknown or elapsed TTL remains visible. Open details and
 response statistics stay accessible without this filter. The display updates
 every second and hides again when fresh telemetry extends the TTL.
 
-Keepalive duration controls use one-hour steps (1–24 hours). The CLI and RPC
+Keepalive duration controls use one-hour steps (1–24 hours). The value applies
+when you click Enable or Renew; while a lease exists, the panel shows the
+duration it was set for and pre-fills the field with it. The CLI and RPC
 continue to accept fractional durations down to 0.25 hours.
 
 ### Status templates

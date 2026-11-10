@@ -10,9 +10,12 @@ export const PRICING_DATE = '2026-11-01';
 const rates: Record<string, { input: number; read: number; output: number }> = {
   'gpt-6-astra': { input: 10, read: 1, output: 50 },
   'gpt-6.1-sol': { input: 2, read: 0.1, output: 10 },
+  'gpt-6-sol': { input: 2, read: 0.2, output: 10 },
   'gpt-6.1-terra': { input: 1, read: 0.05, output: 5 },
   'gpt-6-luna': { input: 0.1, read: 0.01, output: 0.5 },
   'gpt-5.6-sol': { input: 4, read: 0.4, output: 20 },
+  'gpt-5.6-terra': { input: 2, read: 0.2, output: 12 },
+  'gpt-5.6-luna': { input: 0.2, read: 0.02, output: 1.2 },
 };
 export const costSchema = z.object({
   providerId: z.string().default('codex'),
@@ -109,6 +112,7 @@ const claudeLongPromptRates: Record<string, ClaudeRate & { threshold: number }> 
   'claude-haiku-5-5': { threshold: 100_000, input: 0.5, read: 0.05, output: 2.5 },
 };
 const claudeRates: Record<string, ClaudeRate> = {
+  'claude-fable-5-2': { input: 8, read: 0.2, output: 40 },
   'claude-fable-5-1': { input: 10, read: 0.25, output: 50 },
   'claude-fable-5': { input: 10, read: 1, output: 50 },
   'claude-opus-5-5': { input: 4, read: 0.2, output: 20 },

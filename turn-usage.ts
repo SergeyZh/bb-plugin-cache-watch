@@ -21,6 +21,8 @@ export const turnUsageSchema = z.object({
   turnId: z.string().nullable(), readTokens: count, writeTokens: count,
   inputTokens: count, outputTokens: count,
   firstReadTokens: count, note: z.string().nullable(),
+  // Whole prompt of the first request (cached and uncached); null when unknown.
+  firstPromptTokens: count.optional(),
   writeLifetimes: writeLifetimesSchema.nullable().optional(),
   steps: z.array(z.object({ seq: z.number(), at: z.number(), readTokens: count,
     writeTokens: count, inputTokens: count, outputTokens: count, combined: z.boolean(),
@@ -34,7 +36,7 @@ const number = (value: number | undefined): number | null =>
 const reads = (counts: Counts) => number(counts.cacheReadInputTokens ?? counts.cachedInputTokens);
 const difference = (current: number | null, previous: number | null) => current === null || previous === null ? null : current - previous;
 const empty = (note: string, turnId: string | null = null): TurnUsage =>
-  ({ turnId, steps: [], readTokens: null, writeTokens: null, inputTokens: null, outputTokens: null, firstReadTokens: null, writeLifetimes: null, note });
+  ({ turnId, steps: [], readTokens: null, writeTokens: null, inputTokens: null, outputTokens: null, firstReadTokens: null, firstPromptTokens: null, writeLifetimes: null, note });
 const sum = (counts: (number | null)[]) => counts.every((n): n is number => n !== null)
   ? counts.reduce((a, b) => a + b, 0) : null;
 const same = (a: Counts, b: Counts) =>
@@ -123,6 +125,8 @@ export function collectTurnUsage(rows: Event[], providerId = 'codex'): TurnUsage
   return { turnId, steps, inputTokens: sum(steps.map(step => step.inputTokens)), outputTokens: sum(steps.map(step => step.outputTokens)), readTokens: sum(steps.map(step => step.readTokens)),
     writeTokens: sum(steps.map(step => step.writeTokens)),
     firstReadTokens: steps[0].combined ? null : steps[0].readTokens,
+    // Claude input excludes cache reads and writes; other providers include them.
+    firstPromptTokens: steps[0].combined ? null : claude ? sum([steps[0].inputTokens, steps[0].readTokens, steps[0].writeTokens]) : steps[0].inputTokens,
     writeLifetimes: turnLifetimes(steps),
     note: telemetry && steps.some(step => step.incomplete) ? 'Incomplete reports contain only observed tokens. Aggregate remainders may include subagents and are not individual requests.' : claude && !telemetry ? 'Claude Code reports aggregate usage per turn. First-request cache use is not exposed by this provider.' : steps.some(step => step.combined) ? 'Some reports combine requests; first-request cache use is unknown when the first report is combined.' : null };
 }

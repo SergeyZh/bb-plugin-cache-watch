@@ -337,6 +337,43 @@ it('adds separate assistant metadata for the specific turn and opens its saved d
   expect(slot.inspection.rpcCalls.every(call => call.method === 'turn' && (call.input as { turnId: string }).turnId === 'turn-old')).toBe(true);
 });
 
+it('shows how much of the first request was cached and how many requests a turn made', async () => {
+  const { SessionStatisticsPanel } = await import('./statistics-ui');
+  const step = { seq: 1, at: 1000, inputTokens: 2, outputTokens: 8, readTokens: 13220, writeTokens: 19196,
+    source: 'request' as const, messageId: 'msg-1', model: 'claude-sonnet-5-5', combined: false, incomplete: false };
+  const saved = { ...savedTurn('new-session'), providerId: 'claude-code-telemetry', turn: {
+    turnId: 'new-session', inputTokens: 4, outputTokens: 596, readTokens: 45636, writeTokens: 22250,
+    firstReadTokens: 13220, firstPromptTokens: 32418, note: null,
+    steps: [step, { ...step, seq: 2, messageId: 'msg-2', readTokens: 32416, writeTokens: 3054 },
+      { ...step, seq: 3, source: 'aggregate-remainder' as const, messageId: null, model: null, readTokens: 0, writeTokens: 0, combined: true, incomplete: true }] } };
+  const total = { known: 0, unknownTurns: 0 };
+  const slot = renderSlot({ component: SessionStatisticsPanel }, { threadId: 'thr_demo123' }, {
+    rpc: { session: () => ({ providerId: 'claude-code-telemetry', input: total, output: total, read: total, written: total, costMin: total, costMax: total,
+      keepaliveCostMin: total, keepaliveCostMax: total, unattributedReports: 0, totalTurns: 1, keepaliveTurns: 0, syncedThroughSeq: 10,
+      turns: [saved], nextBeforeSeq: null }) },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  expect(await slot.findByText(/· 2 requests · first: hit 40% · /)).toBeTruthy();
+  expect(slot.getByText('Partly — 13,220 of 32,418 prompt tokens read from cache (40%)')).toBeTruthy();
+  expect(slot.getByText(/^2 requests in this turn · first request:/)).toBeTruthy();
+});
+
+it('shows the duration an existing keepalive lease was set for instead of resetting to 6 hours', async () => {
+  const { ThreadCacheDetails } = await import('./thread-cache');
+  const threadId = 'thr_lease123';
+  const now = Date.now();
+  const watch = { threadId, armedAt: now - 3_600_000, until: now + 7 * 3_600_000, lastAttemptAt: null, sent: 1, error: null, disabled: false };
+  const slot = renderSlot({ component: ThreadCacheDetails }, { threadId, projectId: 'proj_test', environment: null, segments: [], isExpanded: true, onToggle() {} }, {
+    rpc: { status: () => ({ ...cacheStatus(threadId), watch, nextPingAt: null }), start: () => watch },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  expect(await slot.findByText(/· set for 8 h · 1 pings/)).toBeTruthy();
+  const input = slot.getByRole('spinbutton', { name: 'Keepalive duration (hours)' }) as HTMLInputElement;
+  expect(input.value).toBe('8');
+  fireEvent.click(slot.getByRole('button', { name: 'Renew paid keepalive' }));
+  await waitFor(() => expect(slot.inspection.rpcCalls.filter(c => c.method === 'start').map(c => c.input)).toEqual([{ threadId, durationHours: 8 }]));
+});
+
 it('does not add a marker to user messages or messages without a turn', async () => {
   const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
   for (const message of [

@@ -31,10 +31,29 @@ export function cacheResult(readTokens: number | null | undefined): 'hit' | 'mis
   return readTokens > 0 ? 'hit' : 'miss';
 }
 
-export function LastCacheUse({ readTokens }: { readTokens: number | null | undefined }) {
-  const result = cacheResult(readTokens);
+/** Share of the first request's prompt read from cache, e.g. "41%"; null when unknown or not a hit. */
+export function firstShare(turn: Pick<TurnUsage, 'firstReadTokens' | 'firstPromptTokens'> | null | undefined): string | null {
+  const read = turn?.firstReadTokens, prompt = turn?.firstPromptTokens;
+  return read == null || prompt == null || read <= 0 || prompt < read ? null : `${Math.floor(read / prompt * 100)}%`;
+}
+/** "hit 41%", "miss" or "unknown": a hit is usually partial, so show how much of the prompt it covered. */
+export function firstLabel(turn: Pick<TurnUsage, 'firstReadTokens' | 'firstPromptTokens'> | null | undefined): string {
+  const share = firstShare(turn);
+  return `${cacheResult(turn?.firstReadTokens)}${share ? ` ${share}` : ''}`;
+}
+/** "3 requests" for individually reported requests, otherwise "2 reports". */
+export function requestCount(turn: TurnUsage): string {
+  const requests = turn.steps.filter(step => step.source === 'request').length;
+  const n = requests || turn.steps.length;
+  return `${n} ${requests ? 'request' : 'report'}${n === 1 ? '' : 's'}`;
+}
+
+export function LastCacheUse({ turn }: { turn: Pick<TurnUsage, 'firstReadTokens' | 'firstPromptTokens'> | null | undefined }) {
+  const result = cacheResult(turn?.firstReadTokens);
+  const share = firstShare(turn);
   return <span className={result === 'hit' ? 'text-green-700 dark:text-green-400' : 'text-muted-foreground'}>
-    {result === 'hit' ? 'Yes — provider reported cache reads' : result === 'miss' ? 'No — provider reported zero cache reads' : 'Not reported by provider'}
+    {share ? `${turn!.firstReadTokens === turn!.firstPromptTokens ? 'Yes' : 'Partly'} — ${tokens(turn!.firstReadTokens)} of ${tokens(turn!.firstPromptTokens)} prompt tokens read from cache (${share})`
+      : result === 'hit' ? 'Yes — provider reported cache reads' : result === 'miss' ? 'No — provider reported zero cache reads' : 'Not reported by provider'}
   </span>;
 }
 
@@ -104,10 +123,13 @@ function useThreadCache(threadId: string) {
 
 function KeepaliveControls({ threadId, status, refresh }: { threadId: string; status: CacheStatus | null; refresh: () => Promise<void> }) {
   const rpc = useRpc<typeof rpcContract>();
-  const [hours, setHours] = useState('6');
+  const [edited, setHours] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const watch = status?.watch;
+  // The lease stores its end, not its duration; show the duration it was set for.
+  const lease = watch && Number.isFinite(watch.until - watch.armedAt) ? Math.round((watch.until - watch.armedAt) / 36_000) / 100 : null;
+  const hours = edited ?? String(lease === null ? 6 : Math.min(24, Math.max(1, Math.round(lease))));
   const active = watch && !watch.disabled && watch.until > Date.now();
   async function change(enable: boolean) {
     setBusy(true); setError('');
@@ -120,11 +142,11 @@ function KeepaliveControls({ threadId, status, refresh }: { threadId: string; st
   }
   return <div className="space-y-2 border-t px-3 pt-2 text-xs">
     <p>Keepalive: {active ? 'Enabled' : watch?.disabled ? 'Paused' : watch ? 'Expired' : 'Off'}</p>
-    {watch && <p className="text-muted-foreground">Ends: {timestamp(watch.until)} · {watch.sent} pings</p>}
+    {watch && <p className="text-muted-foreground">Ends: {timestamp(watch.until)}{lease === null ? '' : ` · set for ${lease} h`} · {watch.sent} pings</p>}
     {active && <p className="text-muted-foreground">Next ping: {status?.nextPingAt == null ? 'Waiting for fresh expiry telemetry' : timestamp(status.nextPingAt)}</p>}
     <p className="text-muted-foreground">Ordinary paid turns · 5 minutes before estimated expiry{status?.expirySource === 'codex-assumption' ? ' · assumed 30m TTL' : ''}.</p>
     <div className="flex flex-wrap items-center gap-2">
-      <label>Hours <input aria-label="Keepalive duration (hours)" type="number" min="1" max="24" step="1" value={hours} onChange={e => setHours(e.target.value)} className="w-16 rounded border bg-background px-1 py-0.5" /></label>
+      <label title="Applies when you click Enable or Renew; the lease then runs for this many hours from that moment.">Hours <input aria-label="Keepalive duration (hours)" type="number" min="1" max="24" step="1" value={hours} onChange={e => setHours(e.target.value)} className="w-16 rounded border bg-background px-1 py-0.5" /></label>
       <button type="button" disabled={busy || !status || !Number.isFinite(Number(hours)) || Number(hours) < 1 || Number(hours) > 24} onClick={() => void change(true)} className="rounded border px-2 py-1 disabled:opacity-50">{active ? 'Renew paid keepalive' : 'Enable paid keepalive'}</button>
       <button type="button" disabled={busy} onClick={() => void change(false)} className="rounded border px-2 py-1 disabled:opacity-50">Stop keepalive</button>
     </div>
@@ -190,7 +212,7 @@ function CachePanel({ threadId, card = false, hideWhenEarly = false, sessionActi
   const threshold = useCacheDisplayThreshold();
   if (hideWhenEarly && !cacheIsVisible(status?.estimatedExpiresAt, remaining.now, threshold)) return null;
   const rows: [string, ReactNode][] = [
-    ['Cache used (first request)', <LastCacheUse readTokens={status?.turn?.firstReadTokens} />],
+    ['Cache used (first request)', <LastCacheUse turn={status?.turn} />],
     ['Turn cache read', tokens(status?.turn?.readTokens)],
     ['Turn cache written', tokens(status?.turn?.writeTokens)],
     ...status?.turn?.writeLifetimes ? [['Written by lifetime', writeLifetimesText(status.turn.writeLifetimes)] as [string, ReactNode]] : [],
