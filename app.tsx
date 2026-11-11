@@ -36,6 +36,11 @@ function CacheWatchPage() {
     return () => { live = false; clearInterval(timer); };
   }, [refresh, report]);
   useRealtime('changed', () => { void refresh().catch(report); });
+  // Nothing to stop while keepalive is known to be off. Keep the control when
+  // the state could not be read, so paid pings can always be stopped.
+  const known = status?.threadId === threadId;
+  const watch = known ? status.watch : null;
+  const active = !!watch && !watch.disabled && watch.until > Date.now();
   async function act(action: () => Promise<unknown>) {
     setBusy(true);
     try { await action(); await refresh(); } catch (e) { report(e); } finally { setBusy(false); }
@@ -56,8 +61,8 @@ function CacheWatchPage() {
       </div>
       <div className="flex flex-wrap gap-2">
         <Button disabled={busy || !threadId} variant="outline" onClick={() => void act(refresh)}>Refresh status</Button>
-        <Button disabled={busy || !threadId} onClick={() => void act(() => rpc.call('start', { threadId, durationHours: Number(hours) }))}>Enable paid keepalive</Button>
-        <Button disabled={busy || !threadId} variant="outline" onClick={() => void act(() => rpc.call('stop', { threadId }))}>Stop keepalive</Button>
+        <Button disabled={busy || !threadId} onClick={() => void act(() => rpc.call('start', { threadId, durationHours: Number(hours) }))}>{active ? 'Renew paid keepalive' : 'Enable paid keepalive'}</Button>
+        {!!threadId && (!known || watch) && <Button disabled={busy} variant="outline" onClick={() => void act(() => rpc.call('stop', { threadId }))}>{!watch || active ? 'Stop keepalive' : 'Clear keepalive'}</Button>}
       </div>
     </section>
     {error && <p role="alert" className="text-destructive">{error}</p>}

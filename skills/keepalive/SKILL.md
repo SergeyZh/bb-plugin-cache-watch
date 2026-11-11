@@ -23,6 +23,8 @@ or elapsed expiry waits for fresh telemetry. No fixed 4-minute interval is used.
 Renewing replaces the lease and resets counters. Stop cancels deferred pings but
 does not interrupt an ongoing turn. Status never enables keepalive.
 
+Stop appears only while a lease exists (Clear for an expired or paused one) or
+when the state cannot be read; with keepalive off only Enable is offered.
 The current session also has duration, enable/renew, and stop controls in the
 expanded **Cache** panel above the composer (or **Prompt cache** context card).
 Do not respond to a keepalive ping by running this skill or renewing a lease;

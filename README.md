@@ -3,7 +3,7 @@
 Inspect prompt-cache usage in [BB](https://getbb.app) and optionally keep selected
 idle threads active with time-limited, paid keepalive turns.
 
-Version **0.4.1**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
+Version **0.4.2**. Requires **BB ≥0.48** and **Plugin SDK ≥0.6.104**.
 Verified with BB 0.48.1 / SDK 0.6.104 on macOS.
 
 ## Thread panel
@@ -203,7 +203,7 @@ write premiums or keepalive costs and are not a net savings claim.
 Once the repository and first release are published:
 
 ```sh
-bb plugin install git:https://github.com/SergeyZh/bb-plugin-cache-watch.git@v0.4.1
+bb plugin install git:https://github.com/SergeyZh/bb-plugin-cache-watch.git@v0.4.2
 ```
 
 For compatible 0.x updates, use `@^0.3.0` instead of the exact tag. BB builds Git

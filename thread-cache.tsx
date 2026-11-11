@@ -121,7 +121,7 @@ function useThreadCache(threadId: string) {
   return { status: current?.status ?? null, error: current?.error ?? false, fetching, refresh };
 }
 
-function KeepaliveControls({ threadId, status, refresh }: { threadId: string; status: CacheStatus | null; refresh: () => Promise<void> }) {
+function KeepaliveControls({ threadId, status, unavailable, refresh }: { threadId: string; status: CacheStatus | null; unavailable: boolean; refresh: () => Promise<void> }) {
   const rpc = useRpc<typeof rpcContract>();
   const [edited, setHours] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -148,7 +148,9 @@ function KeepaliveControls({ threadId, status, refresh }: { threadId: string; st
     <div className="flex flex-wrap items-center gap-2">
       <label title="Applies when you click Enable or Renew; the lease then runs for this many hours from that moment.">Hours <input aria-label="Keepalive duration (hours)" type="number" min="1" max="24" step="1" value={hours} onChange={e => setHours(e.target.value)} className="w-16 rounded border bg-background px-1 py-0.5" /></label>
       <button type="button" disabled={busy || !status || !Number.isFinite(Number(hours)) || Number(hours) < 1 || Number(hours) > 24} onClick={() => void change(true)} className="rounded border px-2 py-1 disabled:opacity-50">{active ? 'Renew paid keepalive' : 'Enable paid keepalive'}</button>
-      <button type="button" disabled={busy} onClick={() => void change(false)} className="rounded border px-2 py-1 disabled:opacity-50">Stop keepalive</button>
+      {/* Nothing to stop while keepalive is off. Keep the control when the state
+          could not be read, so paid pings can always be stopped. */}
+      {(watch || (!status && unavailable)) && <button type="button" disabled={busy} onClick={() => void change(false)} className="rounded border px-2 py-1 disabled:opacity-50">{!watch || active ? 'Stop keepalive' : 'Clear keepalive'}</button>}
     </div>
     {(error || watch?.error) && <p role="alert" className="text-destructive">{error || watch?.error}</p>}
   </div>;
@@ -237,7 +239,7 @@ function CachePanel({ threadId, card = false, hideWhenEarly = false, sessionActi
     <TurnUsageDetails turn={status?.turn} />
     <TelemetryProviderHint providerId={status?.providerId} />
     <CostDetails cost={status?.cost} />
-    <KeepaliveControls key={threadId} threadId={threadId} status={status} refresh={refresh} />
+    <KeepaliveControls key={threadId} threadId={threadId} status={status} unavailable={error} refresh={refresh} />
   </div>;
 }
 

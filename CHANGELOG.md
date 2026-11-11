@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2 — 2026-11-11
+
+- Show **Stop keepalive** only when there is something to stop. While keepalive
+  is off, only Enable is offered; an expired or paused lease offers **Clear
+  keepalive**. Stop stays available when the keepalive state cannot be read.
+- The Cache Watch page labels its button **Renew paid keepalive** while a lease
+  is active, like the thread panel.
+
 ## 0.4.1 — 2026-11-11
 
 - Fix the status template editor reverting to the saved template when a preset

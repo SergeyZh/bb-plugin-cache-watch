@@ -29,6 +29,7 @@ it('loads the registered page, shows unknown cache state, and requires opt-in', 
   expect(await slot.findByText('Keepalive uses ordinary paid turns')).toBeTruthy();
   expect(slot.getByLabelText('Keep alive for (hours)').getAttribute('step')).toBe('1');
   expect(starts).toEqual([]);
+  expect(slot.queryByRole('button', { name: 'Stop keepalive' })).toBeNull();
   fireEvent.click(await slot.findByRole('button', { name: 'Enable paid keepalive' }));
   await waitFor(() => expect(starts).toEqual([{ threadId: 'thr_demo123', durationHours: 6 }]));
 });
@@ -174,6 +175,7 @@ for (const surface of ['card', 'banner'] as const) {
       : renderSlot({ component: app.threadContextSegments[0]!.details! }, props, options);
     unmounts.push(() => slot.lifecycle.unmount());
     expect(await slot.findByText('Keepalive: Off')).toBeTruthy();
+    expect(slot.queryByRole('button', { name: 'Stop keepalive' })).toBeNull();
     expect(slot.getByRole('spinbutton', { name: 'Keepalive duration (hours)' }).getAttribute('step')).toBe('1');
     fireEvent.change(slot.getByRole('spinbutton', { name: 'Keepalive duration (hours)' }), { target: { value: '2' } });
     fireEvent.click(slot.getByRole('button', { name: 'Enable paid keepalive' }));
@@ -184,6 +186,7 @@ for (const surface of ['card', 'banner'] as const) {
     await waitFor(() => expect(slot.getByRole('button', { name: 'Stop keepalive' }).hasAttribute('disabled')).toBe(false));
     fireEvent.click(slot.getByRole('button', { name: 'Stop keepalive' }));
     expect(await slot.findByText('Keepalive: Off')).toBeTruthy();
+    expect(slot.queryByRole('button', { name: 'Stop keepalive' })).toBeNull();
     expect(slot.inspection.rpcCalls.filter(c => c.method === 'stop').map(c => c.input)).toEqual([{ threadId }]);
   });
 }
@@ -356,6 +359,22 @@ it('shows how much of the first request was cached and how many requests a turn 
   expect(await slot.findByText(/· 2 requests · first: hit 40% · /)).toBeTruthy();
   expect(slot.getByText('Partly — 13,220 of 32,418 prompt tokens read from cache (40%)')).toBeTruthy();
   expect(slot.getByText(/^2 requests in this turn · first request:/)).toBeTruthy();
+});
+
+it('offers to clear an expired lease and keeps Stop when the keepalive state is unavailable', async () => {
+  const { ThreadCacheDetails } = await import('./thread-cache');
+  const threadId = 'thr_expired123';
+  const props = { threadId, projectId: 'proj_test', environment: null, segments: [], isExpanded: true, onToggle() {} };
+  const watch = { threadId, armedAt: Date.now() - 7_200_000, until: Date.now() - 3_600_000, lastAttemptAt: null, sent: 2, error: null, disabled: false };
+  const expired = renderSlot({ component: ThreadCacheDetails }, props, { rpc: { status: () => ({ ...cacheStatus(threadId), watch }) } });
+  unmounts.push(() => expired.lifecycle.unmount());
+  expect(await expired.findByText('Keepalive: Expired')).toBeTruthy();
+  expect(expired.getByRole('button', { name: 'Clear keepalive' })).toBeTruthy();
+  expect(expired.getByRole('button', { name: 'Enable paid keepalive' })).toBeTruthy();
+  expired.lifecycle.unmount();
+  const failed = renderSlot({ component: ThreadCacheDetails }, props, { rpc: { status: () => { throw new Error('Provider unavailable'); } } });
+  unmounts.push(() => failed.lifecycle.unmount());
+  expect((await failed.findByRole('button', { name: 'Stop keepalive' })).hasAttribute('disabled')).toBe(false);
 });
 
 it('shows the duration an existing keepalive lease was set for instead of resetting to 6 hours', async () => {
