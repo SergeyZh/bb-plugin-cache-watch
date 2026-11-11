@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 — 2026-11-11
+
+- Fix the status template editor reverting to the saved template when a preset
+  was chosen or the text edited immediately after Save template.
+
 ## 0.4.0 — 2026-11-11
 
 - Show how much of the first request's prompt was read from the cache
