@@ -666,6 +666,39 @@ for (const surface of ['header', 'banner', 'card'] as const) {
   });
 }
 
+it('keeps a preset chosen immediately after a save instead of reverting to the saved template', async () => {
+  const { DEFAULT_STATUS_TEMPLATE, STATUS_PRESETS } = await import('./status-template');
+  const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));
+  let stored: string = DEFAULT_STATUS_TEMPLATE;
+  const slot = renderSlot(app.settingsSections[0]!, {}, {
+    rpc: { getStatusTemplate: () => ({ template: stored }),
+      setStatusTemplate: (input: unknown) => { stored = (input as { template: string }).template; return { template: stored }; } },
+  });
+  unmounts.push(() => slot.lifecycle.unmount());
+  const group = slot.getByRole('group', { name: 'Thread header' });
+  const header = within(group);
+  const editor = await header.findByRole('textbox', { name: 'Status template' }) as HTMLTextAreaElement;
+  await waitFor(() => expect(editor.hasAttribute('disabled')).toBe(false));
+  const preset = header.getByRole('combobox', { name: 'Status template preset' });
+  fireEvent.change(preset, { target: { value: 'Detailed' } });
+  // Choose the next preset in the same task as the commit that reports the save,
+  // before React runs that commit's effects.
+  const chosen = new Promise<void>(resolve => {
+    const observer = new MutationObserver(() => {
+      if (!group.textContent!.includes('Template saved.')) return;
+      observer.disconnect();
+      fireEvent.change(preset, { target: { value: 'Default' } });
+      resolve();
+    });
+    observer.observe(group, { childList: true, subtree: true });
+  });
+  fireEvent.click(header.getByRole('button', { name: 'Save template' }));
+  await chosen;
+  await act(async () => {});
+  expect(stored).toBe(STATUS_PRESETS.find(item => item.name === 'Detailed')!.template);
+  expect(editor.value).toBe(DEFAULT_STATUS_TEMPLATE);
+});
+
 it('edits, previews, validates, saves presets and restores the default template in settings', async () => {
   const { DEFAULT_STATUS_TEMPLATE, STATUS_PRESETS, VARIABLES } = await import('./status-template');
   const app = await loadPluginApp(() => Promise.resolve({ default: appDefinition }));

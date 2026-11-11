@@ -36,7 +36,10 @@ function StatusTemplateEditor({ surface }: { surface: TemplateSurface }) {
   const [message, setMessage] = useState('');
   const [failure, setFailure] = useState('');
   const [scenario, setScenario] = useState('warm');
-  useEffect(() => { if (!dirty) setDraft(saved.template); }, [saved.template, dirty]);
+  // Read through a ref: an edit made right after a save lands before that
+  // save's effect runs, and a captured `dirty` would overwrite the edit.
+  const edited = useRef(false);
+  useEffect(() => { if (!edited.current) setDraft(saved.template); }, [saved.template]);
   const validation = validateStatusTemplate(draft) ?? (!draft.length ? 'Template cannot be empty.' : null);
   const example: TemplateData = {
     ...templateData(null, 0), state: scenario, loading: false, hasUsage: true, hasReport: true, ttlKnown: scenario !== 'unknown',
@@ -51,11 +54,12 @@ function StatusTemplateEditor({ surface }: { surface: TemplateSurface }) {
   };
   const preview = validation ? [] : renderStatusParts(draft, example);
   const ttlColor = scenario === 'warm' ? 'text-green-700 dark:text-green-400' : scenario === 'expired' ? 'text-red-700 dark:text-red-400' : 'text-muted-foreground';
-  function edit(template: string) { setDraft(template); setDirty(true); setMessage(''); setFailure(''); }
+  function edit(template: string) { edited.current = true; setDraft(template); setDirty(true); setMessage(''); setFailure(''); }
   async function save() {
     setBusy(true); setFailure(''); setMessage('');
     try {
       await rpc.call('setStatusTemplate', { template: draft, surface });
+      edited.current = false;
       await saved.refresh(); setDirty(false); setMessage('Template saved.');
     } catch (error) { setFailure(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
